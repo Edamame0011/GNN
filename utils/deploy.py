@@ -12,7 +12,7 @@ def main():
     )
     parser.add_argument(
         '-o', '--output', type = str, 
-        default = "./traced_model.pt",
+        default = "./deployed_model.pt",
         help = "変換後モデルの保存先"
     )
     parser.add_argument(
