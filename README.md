@@ -1,10 +1,10 @@
 データの前処理  
-```python -m utils.preprocess path/to/xyz_file.xyz```
+```python -m utils.preprocess <xyzファイルへのパス>```
 
 
 学習  
-```python -m train.train_schnet --config path/to/config.json```  
+```python -m train.train_schnet --config <configファイルへのパス>```  
 
 
 デプロイ  
-```python -m utils.deploy path/to/model.pth -o path/to/output.pt```
+```python -m utils.deploy <モデルへのパス> -o <出力モデル名>```
