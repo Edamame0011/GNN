@@ -1,0 +1,13 @@
+{
+    "batch_size": 20,
+    "lr": 1e-4,
+    "epochs": 50,
+    "num_interactions": 3,
+    "energy_weight": 0.01,
+    "force_weight": 0.99,
+    "cutoff": 5.0,
+    "num_gaussians": 60,
+    "hidden_dim": 100,
+    "num_filters": 100,
+    "data_path": "data/data.pt"
+}
