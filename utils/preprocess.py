@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from matscipy.neighbours import neighbour_list
+import argparse
 
 #原子の近傍情報を計算し、原子の近接インデックスとエッジ特徴量（距離）に返還
 def RadiusInteractionGraph(atoms, cutoff):
@@ -82,8 +83,21 @@ from torch import save
 from ase.io import iread
 
 def main():
-    path = "data/sample.xyz"
-    cutoff = 5.0
+    #コマンドライン引数
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'input', type = str, 
+        help = ".xyzファイルのパス"
+    )
+    parser.add_argument(
+        '--cutoff', type = float, 
+        default = 5.0, 
+        help = "カットオフ半径"
+    )
+    args = parser.parse_args()
+
+    path = args.input
+    cutoff = args.cutoff
 
     atoms = iread(path, format = 'extxyz')
     atoms_list = []

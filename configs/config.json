@@ -1,6 +1,6 @@
 {
     "batch_size": 20,
-    "lr": 1e-4,
+    "lr": 1e-3,
     "epochs": 50,
     "num_interactions": 3,
     "energy_weight": 0.01,
