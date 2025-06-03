@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from math import pi as PI
 import numpy as np
-from torch_scatter import scatter
 from typing import Tuple, Optional
 
 #ガウス基底関数
@@ -91,14 +90,9 @@ class InterectionBlock(nn.Module):
 
         #メッセージ集約
         #agg_message[k]: ノードkに届くメッセージを表す。
-        agg_messages = scatter(messages, i, dim = 0, reduce = 'add')
-        #scatter(src, index, dim, dim_size, reduce)
-        #scr: 集約元のテンソル（足されるもの）
-        #index: srcと同じ形状の、srcの要素をグループに分けるようなインデックス
-        #dim: srcとindexの沿う軸番号（形状が同じ要素の番号）
-        #例えば、src = ([2, 4, 6], [3, 1, 2], [6, 8, 4], [2, 3, 9], [9, 8, 4], [1, 3 ,2]), index = (0, 1, 0, 2, 2, 1)の時、
-        #scatter(src, index, dim=0) = ([8, 12, 10], [4, 4, 4], [11, 11, 13])
-        #scatter()[0]が0グループ目の足し算の結果、scatter()[1]が、、、、
+        agg_messages = torch.zeros_like(self.lin1(x))
+        index = i.unsqueeze(1) if i.ndim == 1 else i
+        agg_messages = torch.scatter_add(agg_messages, dim = 0, index = index.expand_as(messages), src = messages)
 
         #特徴量更新
         h = self.act(self.lin2(agg_messages))
@@ -177,8 +171,12 @@ class SchNetModel(nn.Module):
         #力を加算。この際、作用反作用の法則から、粒子iにはdiffEが、粒子jには-diffEがかかる。
         #force_i: 力を受ける側の粒子が受ける力 (num_nodes, 3)
         #force_j: 力を与える側の粒子が受ける力 (num_nodes, 3)
-        force_i = scatter(diff_E, i, dim = 0, dim_size = len(x), reduce = 'add')
-        force_j = scatter(-diff_E, j, dim = 0, dim_size = len(x), reduce = 'add')
+        force_i = torch.zeros((len(x), 3), device = edge_weight.device)
+        force_j = torch.zeros((len(x), 3), device = edge_weight.device)
+        index_i = i.unsqueeze(1) if i.ndim == 1 else i
+        index_j = j.unsqueeze(1) if j.ndim == 1 else j
+        force_i = torch.scatter_add(force_i, dim = 0, index = index_i.expand_as(diff_E), src = diff_E)
+        force_j = torch.scatter_add(force_j, dim = 0, index = index_j.expand_as(diff_E), src = -diff_E)
 
         #それぞれの粒子が受ける力
         forces = force_i + force_j #(num_nodes, 3)
@@ -186,8 +184,10 @@ class SchNetModel(nn.Module):
         #バッチごとに集約
         #ここで、batchは、それぞれのノードが所属するサンプル番号を表す1次元テンソル。ノードkは、batch[k]に属する。
         if batch is not None:
+            batch_max = batch.max()
             #total_energy[k]: k番目のサンプルのエネルギー
-            total_energy = scatter(energy.squeeze(), batch, dim = 0, reduce = 'add')
+            total_energy = torch.zeros(batch_max + 1, device = energy.device)
+            total_energy = total_energy.index_add_(0, batch, energy.squeeze())
         
         else:
             total_energy = energy.sum() #全ノードの合計エネルギー

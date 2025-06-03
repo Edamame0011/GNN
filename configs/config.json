@@ -1,7 +1,7 @@
 {
     "batch_size": 20,
     "lr": 1e-3,
-    "epochs": 50,
+    "epochs": 25,
     "num_interactions": 3,
     "energy_weight": 0.01,
     "force_weight": 0.99,
