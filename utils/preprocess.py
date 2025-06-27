@@ -15,6 +15,8 @@ def RadiusInteractionGraph(atoms, cutoff):
         edge_weight: 原子間距離ベクトルを表すテンソル、サイズは(num_edges, 3)
     """
 
+    atoms.set_pbc([True, True, True]) 
+
     #近接ペアと距離情報を取得
     #i: ソース原子のインデックス (num_edges, )
     #j: ターゲット原子のインデックス (num_edges, )

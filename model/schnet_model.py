@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from math import pi as PI
 import numpy as np
-from typing import Tuple, Optional
+from typing import Optional
 
 #ガウス基底関数
 def gaussian_rbf(inputs, offsets, widths):
@@ -66,7 +66,7 @@ class InterectionBlock(nn.Module):
         self.lin2 = nn.Linear(num_filters, hidden_dim)
         self.act = ShiftedSoftplus()
 
-    def forward(self, x: torch.Tensor, edge_index: Tuple[torch.Tensor, torch.Tensor], edge_weight: torch.Tensor, edge_attr: torch.Tensor):
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, edge_attr: torch.Tensor):
         #原子間距離
         distances = torch.norm(edge_weight, dim = 1) #(num_edges, )
         #原子間距離のカットオフ
@@ -78,7 +78,8 @@ class InterectionBlock(nn.Module):
         #mlp: (num_edges, num_gaussians) -> (num_edges, num_filters)
 
         #メッセージ生成
-        i, j = edge_index       
+        i = edge_index[0]
+        j = edge_index[1]       
         #i: 送信先のノードのインデックス (num_edges, )
         #j: 送信元のノードのインデックス (num_edges, )
 
@@ -144,7 +145,7 @@ class SchNetModel(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
-    def forward(self, x: torch.Tensor, edge_index: Tuple[torch.Tensor, torch.Tensor], edge_weight: torch.Tensor, batch: Optional[torch.Tensor] = None):
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: Optional[torch.Tensor] = None):
         edge_weight.requires_grad_()
 
         #埋め込み
@@ -166,7 +167,8 @@ class SchNetModel(nn.Module):
 
         #i: 送信先のノードのインデックス (num_edges, )
         #j: 送信元のノードのインデックス (num_edges, )
-        i, j = edge_index      
+        i = edge_index[0]
+        j = edge_index[1]      
 
         #力を加算。この際、作用反作用の法則から、粒子iにはdiffEが、粒子jには-diffEがかかる。
         #force_i: 力を受ける側の粒子が受ける力 (num_nodes, 3)
