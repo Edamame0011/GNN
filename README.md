@@ -7,4 +7,7 @@
 
 
 デプロイ  
-```python -m utils.deploy <モデルへのパス> -o <出力モデル名>```
+```python -m utils.deploy <モデルへのパス> -o <出力モデル名>```  
+
+シミュレーション  
+```python -m utils.simulate```
