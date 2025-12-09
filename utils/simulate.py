@@ -5,10 +5,10 @@ from ase.md.verlet import VelocityVerlet
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 import torch
 
-data_path = "data/initial_structure.xyz"
+data_path = "data/diamond_structure_2.xyz"
 model_path = "model_schnet_full.pth"
 cutoff = 5.0
-timestep = 0.005 * units.fs
+timestep = 0.5 * units.fs
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 #アウトプットの設定
@@ -30,4 +30,4 @@ MaxwellBoltzmannDistribution(atoms, temperature_K = 300)
 dyn = VelocityVerlet(atoms, timestep, logfile = log_path, loginterval = interval_step)
 
 #シミュレーションの実行（引数：ステップ数）
-dyn.run(1e+5)
+dyn.run(4e+3)
