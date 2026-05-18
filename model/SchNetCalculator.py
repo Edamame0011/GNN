@@ -1,12 +1,29 @@
 from ase.calculators.calculator import Calculator, all_changes
-from utils.preprocess import RadiusInteractionGraph
+from utils.preprocess import CustomData
+from matscipy.neighbours import neighbour_list
+import numpy as np
 import torch
 from torch_geometric.data import Data
 
 def convert(atoms, cutoff):
-    x = torch.tensor(atoms.numbers, dtype = torch.long)
-    edge_index, edge_weight = RadiusInteractionGraph(atoms, cutoff)
-    data = Data(x = x, edge_index = edge_index, edge_weight = edge_weight)
+    atoms.set_pbc([True, True, True]) 
+
+    x = torch.tensor(atoms.numbers, dtype = torch.int64)
+
+    i, j, D = neighbour_list('ijD', atoms, cutoff = cutoff)
+
+    i = np.array(i, dtype = np.int64)
+    j = np.array(j, dtype = np.int64)
+    D = np.array(D, dtype = np.float32)
+
+    edge_weight = torch.tensor(D, dtype = torch.float32).t()            # (3, num_edges)
+    edge_index = torch.tensor(np.stack([i, j]), dtype = torch.int64)    # (2, num_edges)
+
+    data = CustomData(
+        x = x, 
+        edge_index = edge_index, 
+        edge_weight = edge_weight
+    )
 
     return data
 

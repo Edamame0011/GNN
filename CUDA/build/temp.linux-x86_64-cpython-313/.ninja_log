@@ -1,0 +1,11 @@
+# ninja log v5
+0	12221	1778659855877120464	/home/nozawa/GNN/CUDA/build/temp.linux-x86_64-cpython-313/binding.o	ea5ad8b5857f6187
+0	26437	1778659870094189724	/home/nozawa/GNN/CUDA/build/temp.linux-x86_64-cpython-313/calc_force_kernel.o	669ffff9b3e7678a
+1	26492	1778659870149189992	/home/nozawa/GNN/CUDA/build/temp.linux-x86_64-cpython-313/message_agg_kernel.o	d85508cc41e5c3c9
+12	11421	1778659980811729093	/home/nozawa/GNN/CUDA/build/temp.linux-x86_64-cpython-313/binding.o	ea5ad8b5857f6187
+2	13841	1778830542071707166	/home/nozawa/MD_CUDA_2/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/binding.o	98ac0b683cde190d
+3	29826	1778830558051786735	/home/nozawa/MD_CUDA_2/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/calc_force_kernel.o	ea4508083b3bfd2
+3	29846	1778830558071786834	/home/nozawa/MD_CUDA_2/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/message_agg_kernel.o	39e79f15de846c08
+2	14036	1779094494243741437	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/binding.o	35eb9d0e738c4e40
+2	30258	1779094510455698105	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/calc_force_kernel.o	95d63549181c1818
+2	30287	1779094510489698014	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/message_agg_kernel.o	9956a18a8cafb5f7

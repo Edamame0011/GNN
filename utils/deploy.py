@@ -2,6 +2,7 @@ import torch
 import argparse
 from train.train_schnet import load_config
 from torch_geometric.loader import DataLoader
+from utils.preprocess import CustomData
 
 def main():
     #コマンドライン引数

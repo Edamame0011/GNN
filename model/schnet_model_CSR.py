@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from math import pi as PI
 import numpy as np
 from typing import Optional
+from utils.MyGraphFunction import message_aggregate, calc_force
 
 #ガウス基底関数
 def gaussian_rbf(inputs, offsets, widths):
@@ -74,7 +75,7 @@ class SchNet_dict():
     @classmethod
     def from_dict(cls, dic):
         return cls(**dic)
-    
+
 #Interactionレイヤー
 class InteractionBlock(nn.Module):
     def __init__(self, hidden_dim, num_gaussians, num_filters):
@@ -92,6 +93,7 @@ class InteractionBlock(nn.Module):
     def forward(
             self, 
             x: torch.Tensor, 
+            dst_node_ptr: torch.Tensor, 
             i: torch.Tensor, 
             j: torch.Tensor, 
             edge_attr: torch.Tensor, 
@@ -102,10 +104,10 @@ class InteractionBlock(nn.Module):
 
         #メッセージ生成
         messages = W * self.lin1(x[j])
+        messages_t = messages.t().contiguous()
 
         #メッセージ集約
-        agg_messages = torch.zeros((x.size(0), self.num_filters), device=x.device, dtype=x.dtype)
-        agg_messages.index_add_(0, i, messages)
+        agg_messages = message_aggregate(messages_t, dst_node_ptr, i, x.size(0))
 
         #特徴量更新
         h = self.act(self.lin2(agg_messages))
@@ -139,17 +141,26 @@ class SchNetModel(nn.Module):
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: Optional[torch.Tensor] = None):
         edge_weight.requires_grad_()
 
+        i, j = edge_index[0], edge_index[1]
+        num_nodes = x.size(0)
+
+        # CSR形式へ変換
+        degrees_dst = torch.bincount(i, minlength=num_nodes + 1)
+        real_degress_dst = degrees_dst[:num_nodes]
+        dst_node_ptr = torch.zeros(num_nodes + 1, dtype=torch.int64, device=x.device)
+        dst_node_ptr[1:] = torch.cumsum(real_degress_dst, dim=0)
+
+        # 逆エッジのインデックスを取得(あるエッジについて、その逆向きのエッジのインデックス)
+        edge_idx = i * num_nodes + j
+        rev_edge_idx = j * num_nodes + i
+        reverse_edge_idx = torch.searchsorted(edge_idx, rev_edge_idx)
+
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
 
         #RBF展開
         distances = torch.norm(edge_weight, dim=0)
         rbf_expansion = self.rbf(distances) # (num_edges, num_gaussians)
-
-        #i: 送信元のノードのインデックス (num_edges, )
-        #j: 送信先のノードのインデックス (num_edges, )
-        i = edge_index[0]
-        j = edge_index[1]      
 
         #原子間距離のカットオフ
         C = self.cutoff_function(distances, self.cutoff) #(num_edges, )
@@ -164,10 +175,16 @@ class SchNetModel(nn.Module):
         diff_E = torch.autograd.grad([energy.sum()], [edge_weight], create_graph=True)[0] #(3, num_edges)
         assert diff_E is not None
 
+        # 逆向きのエッジに対するdiff_Eを取得し、差を取る（作用・反作用）
+        net_diff_E = diff_E - diff_E[:, reverse_edge_idx]
+        net_diff_E = net_diff_E.contiguous()
+
         #forces: 力を受ける側の粒子が受ける力 (3, N)
         forces = torch.zeros((3, len(x)), device=edge_weight.device)
-        forces.index_add_(1, i, diff_E)
-        forces.index_add_(1, j, -diff_E)
+        forces += calc_force(
+            net_diff_E, 
+            dst_node_ptr
+        )
 
         #バッチごとに集約
         #ここで、batchは、それぞれのノードが所属するサンプル番号を表す1次元テンソル。ノードkは、batch[k]に属する。
