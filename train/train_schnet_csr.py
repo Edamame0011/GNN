@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import random
 import json
-from model.schnet_model import SchNetModel
+from model.schnet_model_CSR import SchNetModel
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 from torch.optim import AdamW

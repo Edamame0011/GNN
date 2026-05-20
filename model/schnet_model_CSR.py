@@ -139,6 +139,18 @@ class SchNetModel(nn.Module):
         self.cutoff_function = CutoffFunction()
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: Optional[torch.Tensor] = None):
+        num_nodes = x.size(0)
+        
+        sort_keys = edge_index[0] * num_nodes + edge_index[1]
+        sorted_indices = torch.argsort(sort_keys)
+    
+        # エッジインデックスとエッジの重みをソート後の順序で並び替え
+        edge_index = edge_index[:, sorted_indices]
+        if edge_weight.dim() == 1:
+            edge_weight = edge_weight[sorted_indices]
+        else:
+            edge_weight = edge_weight[:, sorted_indices]
+
         edge_weight.requires_grad_()
 
         i, j = edge_index[0], edge_index[1]
@@ -167,7 +179,7 @@ class SchNetModel(nn.Module):
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, i, j, rbf_expansion, C)
+            h = interaction(h, dst_node_ptr, i, j, rbf_expansion, C)
         
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
@@ -180,7 +192,7 @@ class SchNetModel(nn.Module):
         net_diff_E = net_diff_E.contiguous()
 
         #forces: 力を受ける側の粒子が受ける力 (3, N)
-        forces = torch.zeros((3, len(x)), device=edge_weight.device)
+        forces = torch.zeros((3, x.size(0)), device=edge_weight.device)
         forces += calc_force(
             net_diff_E, 
             dst_node_ptr

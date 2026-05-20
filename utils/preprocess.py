@@ -5,6 +5,7 @@ import argparse
 from torch_geometric.data import Data
 from torch import save
 from ase.io import iread
+from tqdm import tqdm
 
 class CustomData(Data):
     def __cat_dim__(self, key, value, *args, **kwargs):
@@ -20,13 +21,18 @@ def AtomsToCustomData(atoms, cutoff):
     forces = torch.tensor(atoms.get_forces(), dtype = torch.float32).t()    # (3, N)
     pos = torch.tensor(atoms.get_positions(), dtype = torch.float32).t()    # (3, N)
 
-    num_nodes = len(atoms)
-
     #近接ペアと距離情報を取得
     #i: ソース原子のインデックス (N, )
     #j: ターゲット原子のインデックス (N, )
     #D: 原子間距離ベクトル (N, 3)
     i, j, D = neighbour_list('ijD', atoms, cutoff = cutoff)
+
+    # iについてソート（CSR対応のため）
+    sort_idx = np.lexsort((j, i)) 
+    
+    i = i[sort_idx]
+    j = j[sort_idx]
+    D = D[sort_idx]
 
     i = np.array(i, dtype = np.int64)
     j = np.array(j, dtype = np.int64)
@@ -49,7 +55,7 @@ def AtomsToCustomData(atoms, cutoff):
 #原子リストをデータリストに変換
 def ConvertAtomListToDataList(atoms_list, cutoff):
     data_list = []
-    for atoms in atoms_list:
+    for atoms in tqdm(atoms_list):
         data = AtomsToCustomData(atoms, cutoff)
         data_list.append(data)
 

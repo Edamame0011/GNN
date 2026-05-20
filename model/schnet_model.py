@@ -157,7 +157,7 @@ class SchNetModel(nn.Module):
         #Interactionレイヤー
         for interaction in self.interactions:
             h = interaction(h, i, j, rbf_expansion, C)
-        
+
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
 
@@ -165,7 +165,7 @@ class SchNetModel(nn.Module):
         assert diff_E is not None
 
         #forces: 力を受ける側の粒子が受ける力 (3, N)
-        forces = torch.zeros((3, len(x)), device=edge_weight.device)
+        forces = x.new_zeros(3, x.size(0), dtype=edge_weight.dtype)
         forces.index_add_(1, i, diff_E)
         forces.index_add_(1, j, -diff_E)
 

@@ -48,7 +48,7 @@ namespace {
         if (edge_idx >= num_edges || feat_idx >= num_feat) return;
 
         const int64_t i = dst_list[edge_idx];
-        grad_messages[edge_idx * num_feat + feat_idx] = grad_agg_messages[i * num_feat + feat_idx];
+        grad_messages[feat_idx * num_edges + edge_idx] = grad_agg_messages[i * num_feat + feat_idx];
     }
 }
 
@@ -87,7 +87,7 @@ torch::Tensor message_agg_backward(
 ) {
     const int64_t num_edges = dst_list.size(0);
     const int64_t num_feat = grad_agg_messages.size(1);
-    auto grad_messages = torch::empty({num_edges, num_feat}, grad_agg_messages.options());
+    auto grad_messages = torch::empty({num_feat, num_edges}, grad_agg_messages.options());
 
     dim3 num_threads(32, 8);
     dim3 num_blocks(
