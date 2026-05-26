@@ -3,7 +3,7 @@ import argparse
 from train.train_schnet import load_config
 from torch_geometric.loader import DataLoader
 from utils.preprocess import CustomData
-from model.schnet_model_export import SchNetModel
+from model.schnet_model_CSR_export import SchNetModel
 
 def main():
     #コマンドライン引数

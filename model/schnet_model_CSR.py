@@ -93,7 +93,7 @@ class InteractionBlock(nn.Module):
     def forward(
             self, 
             x: torch.Tensor, 
-            dst_node_ptr: torch.Tensor, 
+            offsets: torch.Tensor, 
             i: torch.Tensor, 
             j: torch.Tensor, 
             edge_attr: torch.Tensor, 
@@ -104,10 +104,14 @@ class InteractionBlock(nn.Module):
 
         #メッセージ生成
         messages = W * self.lin1(x[j])
-        messages_t = messages.t().contiguous()
 
         #メッセージ集約
-        agg_messages = message_aggregate(messages_t, dst_node_ptr, i, x.size(0))
+        agg_messages = message_aggregate(
+            messages, 
+            offsets, 
+            i, 
+            x.size(0)
+        )
 
         #特徴量更新
         h = self.act(self.lin2(agg_messages))
@@ -139,39 +143,30 @@ class SchNetModel(nn.Module):
         self.cutoff_function = CutoffFunction()
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor, batch: Optional[torch.Tensor] = None):
+        """
+        x: (num_nodes, )
+        edge_weight: (3, num_edges)
+        edge_index: (2, num_edges)
+        """
+        if not edge_weight.requires_grad:
+            edge_weight.requires_grad_(True)
+            
         num_nodes = x.size(0)
         
-        sort_keys = edge_index[0] * num_nodes + edge_index[1]
-        sorted_indices = torch.argsort(sort_keys)
-    
-        # エッジインデックスとエッジの重みをソート後の順序で並び替え
-        edge_index = edge_index[:, sorted_indices]
-        if edge_weight.dim() == 1:
-            edge_weight = edge_weight[sorted_indices]
-        else:
-            edge_weight = edge_weight[:, sorted_indices]
-
-        edge_weight.requires_grad_()
-
         i, j = edge_index[0], edge_index[1]
-        num_nodes = x.size(0)
+        # i: target node index
+        # j: source node index
 
-        # CSR形式へ変換
-        degrees_dst = torch.bincount(i, minlength=num_nodes + 1)
-        real_degress_dst = degrees_dst[:num_nodes]
-        dst_node_ptr = torch.zeros(num_nodes + 1, dtype=torch.int64, device=x.device)
-        dst_node_ptr[1:] = torch.cumsum(real_degress_dst, dim=0)
+        degrees_dst = torch.bincount(i, minlength=num_nodes)
+        offsets = torch.zeros(num_nodes + 1, dtype=torch.int64, device=x.device)
+        offsets[1:] = torch.cumsum(degrees_dst, dim=0)
 
-        # 逆エッジのインデックスを取得(あるエッジについて、その逆向きのエッジのインデックス)
-        edge_idx = i * num_nodes + j
-        rev_edge_idx = j * num_nodes + i
-        reverse_edge_idx = torch.searchsorted(edge_idx, rev_edge_idx)
+        distances = torch.norm(edge_weight, dim=0) # (num_edges, )
 
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
 
         #RBF展開
-        distances = torch.norm(edge_weight, dim=0)
         rbf_expansion = self.rbf(distances) # (num_edges, num_gaussians)
 
         #原子間距離のカットオフ
@@ -179,34 +174,31 @@ class SchNetModel(nn.Module):
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, dst_node_ptr, i, j, rbf_expansion, C)
+            h = interaction(h, offsets, i, j, rbf_expansion, C)
         
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
 
-        diff_E = torch.autograd.grad([energy.sum()], [edge_weight], create_graph=True)[0] #(3, num_edges)
-        assert diff_E is not None
-
-        # 逆向きのエッジに対するdiff_Eを取得し、差を取る（作用・反作用）
-        net_diff_E = diff_E - diff_E[:, reverse_edge_idx]
-        net_diff_E = net_diff_E.contiguous()
+        # 力の計算
+        diff_E = torch.autograd.grad(
+            outputs=energy.sum(), 
+            inputs=edge_weight, 
+            create_graph=True, 
+            retain_graph=True
+        )[0]
 
         #forces: 力を受ける側の粒子が受ける力 (3, N)
-        forces = torch.zeros((3, x.size(0)), device=edge_weight.device)
-        forces += calc_force(
-            net_diff_E, 
-            dst_node_ptr
-        )
+        forces = x.new_zeros(3, x.size(0), dtype=edge_weight.dtype)
+        forces.index_add_(1, i, diff_E)
+        forces.index_add_(1, j, -diff_E)
 
         #バッチごとに集約
-        #ここで、batchは、それぞれのノードが所属するサンプル番号を表す1次元テンソル。ノードkは、batch[k]に属する。
         if batch is not None:
             batch_max = batch.max()
-            #total_energy[k]: k番目のサンプルのエネルギー
             total_energy = torch.zeros(batch_max + 1, device=energy.device)
             total_energy = total_energy.index_add_(0, batch, energy.squeeze(-1))
         
         else:
-            total_energy = energy.sum() #全ノードの合計エネルギー
+            total_energy = energy.sum()
         
         return total_energy, forces

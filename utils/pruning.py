@@ -1,12 +1,12 @@
 import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
 import argparse
-from train.train_schnet import load_config
-from torch_geometric.loader import DataLoader
-from utils.preprocess import CustomData
 from model.schnet_model_export import SchNetModel
+from train.train_schnet import load_config
 
 def main():
-    #コマンドライン引数
+    # コマンドライン引数
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'input', type = str, 
@@ -14,7 +14,7 @@ def main():
     )
     parser.add_argument(
         '-o', '--output', type = str, 
-        default = "./deployed_model.pt",
+        default = "./pruned_model.pt",
         help = "変換後モデルの保存先"
     )
     parser.add_argument(
@@ -24,8 +24,11 @@ def main():
     )
     args = parser.parse_args()
 
-    #configファイルの読み込み
-    config_path =  "configs/config.json"
+    input_path = args.input
+    output_path = args.output
+    config_path = args.config
+
+    # configファイルの読み込み
     config = load_config(config_path)
     num_interactions    = config["num_interactions"]
     cutoff              = config["cutoff"]
@@ -33,19 +36,31 @@ def main():
     hidden_dim          = config["hidden_dim"]
     num_filters         = config["num_filters"]
 
-    input_path = args.input
-    output_path = args.output
+    device = torch.device("cuda")
 
-    device = torch.device("cpu")
-
-    #モデルの読み込み
+    # モデルの読み込み
     model = SchNetModel(hidden_dim = hidden_dim, num_gaussians = num_gaussians, 
                         num_filters = num_filters, num_interactions = num_interactions, cutoff = cutoff)
     state_dict = torch.load(input_path, weights_only=False)["model_state_dict"]
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    #スクリプト化
+
+    # プルーニング
+    amount = 0.3
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            prune.ln_structured(module, name="weight", amount=amount, n=2, dim=0)
+
+            if module.bias is not None:
+                prune.l1_unstructured(module, name="bias", amount=amount)
+            
+            prune.remove(module, "weight")
+            if module.bias is not None:
+                prune.remove(module, "bias")
+    
+
+        #スクリプト化
     script_module = torch.jit.script(model)
 
     #モデルの保存

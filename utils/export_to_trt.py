@@ -7,6 +7,7 @@ from utils.preprocess import CustomData
 import argparse
 from torch.func import functional_call, grad
 from torch.fx.experimental.proxy_tensor import make_fx
+import torch_tensorrt
 
 # エネルギーのみを計算するモデル
 class SchNetModel(nn.Module):
@@ -88,7 +89,7 @@ def main():
     )
     parser.add_argument(
         '-o', '--output', type = str, 
-        default = "./exported_model.pt2",
+        default = "./exported_model_trt.ts",
         help = "変換後モデルの保存先"
     )
     parser.add_argument(
@@ -150,28 +151,23 @@ def main():
         return total_energy, forces
 
     # ダミー入力
-    data_list = torch.load(data_path, weights_only = False)
-    loader = DataLoader(data_list, batch_size = 1, shuffle =  False)
-    data = next(iter(loader))
-    data = data.to(device)
-    print(f"ダミー入力を{data_path}から読み込みました。")
-
-    print("data.x shape:", data.x.shape)
-    print("data.edge_index shape:", data.edge_index.shape)
-    print("data.edge_weight shape:", data.edge_weight.shape)
+    num_nodes = 1800
+    num_edges = 65000
+    x = torch.randint(0, 100, (num_nodes, ), dtype=torch.long, device=device)
+    edge_index = torch.randint(0, num_nodes, (2, num_edges), dtype=torch.long, device=device)
+    edge_weight = torch.randn(3, num_edges, dtype=torch.float, device=device)
 
     # torch.funcの展開
-    traced_graph = make_fx(compute_energy_and_force, tracing_mode="symbolic")(state_values, data.x, data.edge_index, data.edge_weight)
+    traced_graph = make_fx(compute_energy_and_force, tracing_mode="symbolic")(state_values, x, edge_index, edge_weight)
 
     wrapper = ExportWrapper(traced_graph, state_keys, state_dict).to(device)
     wrapper.eval()
 
     # 要素数が可変な要素の設定
-    num_nodes = torch.export.Dim("num_nodes", min=1)
     num_edges = torch.export.Dim("num_edges", min=1)
     
     dynamic_shapes = (
-        {0: num_nodes}, # data.x (num_nodes, )
+        None, # data.x (num_nodes, )
         {1: num_edges}, # data.edge_index (2, num_edges)
         {1: num_edges}, # data.edge_weight (3, num_edges)
     )
@@ -179,17 +175,30 @@ def main():
     # エクスポート
     exported_program = torch.export.export(
         wrapper, 
-        args=(data.x, data.edge_index, data.edge_weight), 
+        args=(x, edge_index, edge_weight), 
         dynamic_shapes=dynamic_shapes
     )
-    torch._inductor.aoti_compile_and_package(
+    trt_compiled = torch_tensorrt.compile(
         exported_program, 
-        package_path=output_path, 
-        inductor_configs={
-            "max_autotune": True, 
-            "freezing": True
-        }
+        inputs=[
+            torch_tensorrt.Input(
+                shape=(1800, ), 
+                dtype=torch.int64
+            ), 
+            torch_tensorrt.Input(
+                min_shape=(2, 60000), 
+                opt_shape=(2, 65000), 
+                max_shape=(2, 70000)
+            ), 
+            torch_tensorrt.Input(
+                min_shape=(3, 60000), 
+                opt_shape=(3, 65000), 
+                max_shape=(3, 70000)
+            )
+        ], 
+        workspace_size=20 << 30
     )
+    torch.jit.save(trt_compiled, output_path)
     print(f"モデルが正常に {output_path} へエクスポートされました。")
 
 if __name__ == "__main__":

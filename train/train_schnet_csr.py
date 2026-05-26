@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import StepLR
 from tensorboardX import SummaryWriter
 import argparse
 from utils.preprocess import CustomData
+from tqdm import tqdm
 
 #シードを設定する関数
 def set_seed(seed):
@@ -144,7 +145,7 @@ def main():
     scheduler = StepLR(optimizer, step_size = 100, gamma = 0.5)
     criterion = MSELoss()
 
-    for epoch in range(epochs):
+    for epoch in tqdm(range(epochs)):
         #学習
         loss_total, loss_e_total, loss_f_total = train(model = model, 
                                                        criterion = criterion, 

@@ -105,7 +105,8 @@ class InteractionBlock(nn.Module):
 
         #メッセージ集約
         agg_messages = torch.zeros((x.size(0), self.num_filters), device=x.device, dtype=x.dtype)
-        agg_messages.index_add_(0, i, messages)
+        index = i.unsqueeze(1) if i.ndim == 1 else i
+        agg_messages = torch.scatter_add(agg_messages, dim=0, index = index.expand_as(messages), src = messages)
 
         #特徴量更新
         h = self.act(self.lin2(agg_messages))
@@ -149,7 +150,7 @@ class SchNetModel(nn.Module):
         #i: 送信元のノードのインデックス (num_edges, )
         #j: 送信先のノードのインデックス (num_edges, )
         i = edge_index[0]
-        j = edge_index[1]      
+        j = edge_index[1]
 
         #原子間距離のカットオフ
         C = self.cutoff_function(distances, self.cutoff) #(num_edges, )
@@ -168,7 +169,7 @@ class SchNetModel(nn.Module):
         forces = x.new_zeros(3, x.size(0), dtype=edge_weight.dtype)
         forces.index_add_(1, i, diff_E)
         forces.index_add_(1, j, -diff_E)
-
+        
         #バッチごとに集約
         #ここで、batchは、それぞれのノードが所属するサンプル番号を表す1次元テンソル。ノードkは、batch[k]に属する。
         if batch is not None:

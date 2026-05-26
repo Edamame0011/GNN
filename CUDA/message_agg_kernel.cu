@@ -7,7 +7,7 @@ namespace {
     __global__  void message_agg_forward_kernel(
         float* __restrict__ agg_messages, 
         const float* __restrict__ messages, 
-        const int64_t* __restrict__ dst_node_ptr, 
+        const int64_t* __restrict__ offsets, 
         const int64_t num_nodes, 
         const int64_t num_edges, 
         const int64_t num_feat
@@ -17,12 +17,12 @@ namespace {
         const int64_t feat_idx = blockIdx.x;
         if (node_idx >= num_nodes || feat_idx >= num_feat) return;
 
-        const int64_t start_edge_idx = dst_node_ptr[node_idx];
-        const int64_t end_edge_idx = dst_node_ptr[node_idx + 1];
+        const int64_t start_edge_idx = offsets[node_idx];
+        const int64_t end_edge_idx = offsets[node_idx + 1];
 
         float m = 0.0f;
         for (int64_t e = start_edge_idx + lane_id; e < end_edge_idx; e += 32) {
-            m += messages[feat_idx * num_edges + e];
+            m += messages[e * num_feat + feat_idx];
         }
 
         unsigned int mask = 0xffffffff;
@@ -40,6 +40,8 @@ namespace {
         float* __restrict__ grad_messages, 
         const float* __restrict__ grad_agg_messages, 
         const int64_t* __restrict__ dst_list, 
+        const int64_t* __restrict__ offsets,
+        const int64_t num_nodes, 
         const int64_t num_edges, 
         const int64_t num_feat
     ) {
@@ -47,18 +49,26 @@ namespace {
         const int64_t edge_idx = threadIdx.y + blockIdx.y * blockDim.y;
         if (edge_idx >= num_edges || feat_idx >= num_feat) return;
 
+        const int64_t num_valid_edges = offsets[num_nodes];
+
+        if (edge_idx >= num_valid_edges) {
+            grad_messages[edge_idx * num_feat + feat_idx] = 0.0f;
+            return;
+        }
+
         const int64_t i = dst_list[edge_idx];
-        grad_messages[feat_idx * num_edges + edge_idx] = grad_agg_messages[i * num_feat + feat_idx];
+        grad_messages[edge_idx * num_feat + feat_idx] = grad_agg_messages[i * num_feat + feat_idx];
     }
 }
 
 torch::Tensor message_agg_forward(
     torch::Tensor messages, 
-    torch::Tensor dst_node_ptr, 
+    torch::Tensor offsets, 
     int64_t num_nodes
 ) {
-    const int64_t num_feat = messages.size(0);
-    const int64_t num_edges = messages.size(1);
+    const int64_t num_edges = messages.size(0);
+    const int64_t num_feat = messages.size(1);
+
     auto agg_messages = torch::zeros({num_nodes, num_feat}, messages.options());
 
     dim3 num_threads(32, 8);
@@ -72,7 +82,7 @@ torch::Tensor message_agg_forward(
     message_agg_forward_kernel<<<num_blocks, num_threads, 0, stream>>>(
         agg_messages.data_ptr<float>(), 
         messages.data_ptr<float>(), 
-        dst_node_ptr.data_ptr<int64_t>(), 
+        offsets.data_ptr<int64_t>(), 
         num_nodes, 
         num_edges, 
         num_feat
@@ -83,11 +93,17 @@ torch::Tensor message_agg_forward(
 
 torch::Tensor message_agg_backward(
     torch::Tensor grad_agg_messages, 
-    torch::Tensor dst_list
+    torch::Tensor dst_list, 
+    torch::Tensor offsets, 
+    int64_t num_nodes
 ) {
-    const int64_t num_edges = dst_list.size(0);
+    grad_agg_messages = grad_agg_messages.contiguous();
+    dst_list = dst_list.contiguous();
+
     const int64_t num_feat = grad_agg_messages.size(1);
-    auto grad_messages = torch::empty({num_feat, num_edges}, grad_agg_messages.options());
+    const int64_t num_edges = dst_list.size(0);
+
+    auto grad_messages = torch::empty({num_edges, num_feat}, grad_agg_messages.options());
 
     dim3 num_threads(32, 8);
     dim3 num_blocks(
@@ -101,6 +117,8 @@ torch::Tensor message_agg_backward(
         grad_messages.data_ptr<float>(), 
         grad_agg_messages.data_ptr<float>(), 
         dst_list.data_ptr<int64_t>(), 
+        offsets.data_ptr<int64_t>(),
+        num_nodes, 
         num_edges, 
         num_feat
     );
