@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from model.schnet_model import SchNet_dict, GaussianRBF, ShiftedSoftplus, TypeEmbedding, CutoffFunction
 from typing import Optional
-import flash_schnet_ext
+from utils.MyGraphFunction import fused_distance_gaussian_rbf_cutoff, fused_csr_cfconv
 
 #Interactionレイヤー
 class InteractionBlock(nn.Module):
@@ -26,9 +26,6 @@ class InteractionBlock(nn.Module):
             edge_src: torch.Tensor, 
             edge_dst: torch.Tensor, 
             dst_ptr: torch.Tensor, 
-            csr_perm: torch.Tensor, 
-            src_ptr: torch.Tensor, 
-            src_perm: torch.Tensor, 
             num_nodes: int, 
             cutoff: float
         ):
@@ -43,11 +40,8 @@ class InteractionBlock(nn.Module):
             edge_src, 
             edge_dst, 
             dst_ptr, 
-            csr_perm, 
             num_nodes, 
-            cutoff, 
-            src_ptr, 
-            src_perm
+            cutoff
         )
 
         h = self.act(self.lin2(conv_out))
@@ -83,14 +77,11 @@ class SchNetModel(nn.Module):
     def forward(
             self, 
             x: torch.Tensor, 
-            pos: torch.Tensor, 
             edge_index: torch.Tensor, 
-            dst_ptr: torch.Tensor, 
-            csr_perm: torch.Tensor, 
-            src_ptr: torch.Tensor, 
-            src_perm: torch.Tensor
+            edge_weight: torch.Tensor, 
+            dst_ptr: torch.Tensor
         ):
-        pos.requires_grad_(True)
+        edge_weight.requires_grad_(True)
 
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
@@ -98,21 +89,28 @@ class SchNetModel(nn.Module):
         i = edge_index[0]
         j = edge_index[1]
 
-        distances, rbf_expansion = torch.ops.flash_schnet_ext.fused_distance_gaussian_rbf_cutoff(
-            pos, i, j, self.centers, self.gamma, self.cutoff
+        distances = torch.norm(edge_weight, dim=0)
+
+        rbf_expansion = fused_distance_gaussian_rbf_cutoff(
+            distances, self.centers, self.gamma, self.cutoff
         )
 
         num_nodes = x.size(0)
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, csr_perm, src_ptr, src_perm, num_nodes, self.cutoff)
+            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, num_nodes, self.cutoff)
 
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
         total_energy = energy.sum()
 
-        forces = -torch.autograd.grad([energy.sum()], [pos], create_graph=False)[0] #(3, num_edges)
-        assert forces is not None
+        diff_E = torch.autograd.grad([total_energy], [edge_weight], create_graph=False)[0] #(3, num_edges)
+        assert diff_E is not None
 
-        return total_energy
+        #forces: 力を受ける側の粒子が受ける力 (3, N)
+        forces = x.new_zeros(3, x.size(0), dtype=edge_weight.dtype)
+        forces.index_add_(1, i, diff_E)
+        forces.index_add_(1, j, -diff_E)
+        
+        return total_energy, forces

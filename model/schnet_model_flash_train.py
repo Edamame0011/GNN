@@ -81,8 +81,6 @@ class SchNetModel(nn.Module):
             edge_weight: torch.Tensor, 
             batch: Optional[torch.Tensor] = None
         ):
-        edge_weight.requires_grad_(True)
-
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
 
@@ -92,18 +90,26 @@ class SchNetModel(nn.Module):
         # CSR形式への変換
         num_nodes = x.size(0)
 
+        perm = torch.argsort(i)
+
+        i = i[perm]
+        j = j[perm]
+        edge_weight = edge_weight[:, perm].requires_grad_(True)
+
         # dst (i) に対する並び替えインデックスとポインタの作成
         dst_counts = torch.bincount(i, minlength=num_nodes)
         dst_ptr = torch.zeros(num_nodes + 1, dtype=torch.int32, device=i.device)
         dst_ptr[1:] = torch.cumsum(dst_counts, dim=0)
         
+        distances = torch.norm(edge_weight, dim=0)
+
         rbf_expansion = fused_distance_gaussian_rbf_cutoff(
-            edge_weight, self.centers, self.gamma, self.cutoff
+            distances, self.centers, self.gamma, self.cutoff
         )
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, rbf_expansion, edge_weight, i, j, dst_ptr, num_nodes, self.cutoff)
+            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, num_nodes, self.cutoff)
 
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)

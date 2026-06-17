@@ -1,8 +1,0 @@
-setup.py
-/home/nozawa/SchNet/CUDA/binding.cpp
-/home/nozawa/SchNet/CUDA/src/functions.cpp
-/home/nozawa/SchNet/CUDA/src/kernels.cu
-flash_schnet_ext.egg-info/PKG-INFO
-flash_schnet_ext.egg-info/SOURCES.txt
-flash_schnet_ext.egg-info/dependency_links.txt
-flash_schnet_ext.egg-info/top_level.txt
