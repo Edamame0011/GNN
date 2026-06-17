@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import random
 import json
-from model.schnet_model_CSR import SchNetModel
+from model.schnet_model_flash_train import SchNetModel
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 from torch.optim import AdamW
@@ -34,7 +34,7 @@ def train(model, criterion, energy_weight, force_weight, dataloader, optimizer, 
     for batch in dataloader:
         batch = batch.to(device)
         optimizer.zero_grad()
-        energies, forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
+        energies, forces = model(batch.x, batch.pos, batch.edge_index, batch.batch)
 
         loss_e = criterion(energies, batch.y)
         loss_f = criterion(forces, batch.forces)
@@ -62,7 +62,7 @@ def evaluate(model, criterion, energy_weight, force_weight, dataloader, device):
 
     for batch in dataloader:
         batch = batch.to(device)
-        energies, forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
+        energies, forces = model(batch.x, batch.pos, batch.edge_index, batch.batch)
 
         loss_e = criterion(energies, batch.y)
         loss_f = criterion(forces, batch.forces)
@@ -191,7 +191,7 @@ def main():
     ref_forces=[]
     for batch in test_dataloader:
         batch = batch.to(device)
-        energies,forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
+        energies,forces = model(batch.x, batch.pos, batch.edge_index, batch.batch)
         results_energy.extend(energies.detach().to('cpu').numpy().flatten())
         results_forces.extend(forces.detach().to('cpu').numpy().flatten())
         ref_energy.extend(batch.y.detach().to('cpu').numpy().flatten())

@@ -1,92 +1,48 @@
 #include <torch/extension.h>
 #include <torch/script.h>
 
-torch::Tensor calc_force_forward(torch::Tensor diff_E, torch::Tensor dst_node_ptr);
-torch::Tensor calc_force_backward(torch::Tensor diff_E, torch::Tensor grad_force, torch::Tensor dst_node_ptr);
-torch::Tensor message_agg_forward(torch::Tensor messages, torch::Tensor dst_node_ptr, int64_t num_nodes);
-torch::Tensor message_agg_backward(torch::Tensor grad_agg_messages, torch::Tensor dst_list, torch::Tensor offsets, int64_t num_nodes);
+#include "functions.hpp"
 
-class CalcForceFunction : public torch::autograd::Function<CalcForceFunction> {
-public:
-    static torch::Tensor forward(
-        torch::autograd::AutogradContext *ctx, 
-        torch::Tensor diff_E, 
-        torch::Tensor dst_node_ptr) 
-    {
-        ctx->save_for_backward({diff_E, dst_node_ptr});
-        return calc_force_forward(diff_E, dst_node_ptr);
-    }
+using namespace FlashSchNet::functions;
 
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx, 
-        torch::autograd::variable_list grad_outputs) 
-    {
-        auto saved = ctx->get_saved_variables();
-        auto diff_E = saved[0];
-        auto dst_node_ptr = saved[1];
-        auto grad_force = grad_outputs[0];
-
-        auto grad_diff_E = calc_force_backward(diff_E, grad_force, dst_node_ptr);
-        
-        // forwardの引数に対応する勾配を返す (dst_node_ptr は勾配不要なので未定義Tensor)
-        return {grad_diff_E, torch::Tensor()};
-    }
-};
-
-class MessageAggregateFunction : public torch::autograd::Function<MessageAggregateFunction> {
-public:
-    static torch::Tensor forward(
-        torch::autograd::AutogradContext *ctx, 
-        torch::Tensor messages, 
-        torch::Tensor offsets, 
-        torch::Tensor dst_list, 
-        int64_t num_nodes) 
-    {
-        ctx->save_for_backward({dst_list, offsets});
-        ctx->saved_data["num_nodes"] = num_nodes;
-        return message_agg_forward(messages, offsets, num_nodes);
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx, 
-        torch::autograd::variable_list grad_outputs) 
-    {
-        auto saved = ctx->get_saved_variables();
-        auto dst_list = saved[0];
-        auto offsets = saved[1];
-        auto grad_agg_messages = grad_outputs[0];
-
-        int64_t num_nodes = ctx->saved_data["num_nodes"].toInt();
-
-        auto grad_messages = message_agg_backward(grad_agg_messages, dst_list, offsets, num_nodes);
-
-        return {grad_messages, torch::Tensor(), torch::Tensor(), torch::Tensor()};
-    }
-};
-
-torch::Tensor calc_force_op(torch::Tensor diff_E, torch::Tensor dst_node_ptr) {
-    return CalcForceFunction::apply(diff_E, dst_node_ptr);
-}
-
-torch::Tensor message_aggregate_op(
-    torch::Tensor messages, 
-    torch::Tensor offsets, 
-    torch::Tensor dst_list, 
-    int64_t num_nodes) 
+std::vector<torch::Tensor> fused_distance_gaussian_rbf_cutoff(
+    torch::Tensor pos, 
+    torch::Tensor edge_src, 
+    torch::Tensor edge_dst, 
+    torch::Tensor centers, 
+    double gamma, 
+    double cutoff) 
 {
-    return MessageAggregateFunction::apply(messages, offsets, dst_list, num_nodes);
+    return FusedDistanceGaussianRBFCutoffFunction::apply(
+        pos, edge_src, edge_dst, centers, gamma, cutoff);
 }
 
-// 関数の「型（スキーマ）」だけを定義するブロック
-TORCH_LIBRARY(my_graph_ops, m) {
-    m.def("calc_force(Tensor diff_E, Tensor dst_node_ptr) -> Tensor");
-    m.def("message_aggregate(Tensor messages, Tensor dst_node_ptr, Tensor dst_list, int num_nodes) -> Tensor");
+torch::Tensor fused_csr_cfconv(
+    torch::Tensor x, 
+    torch::Tensor filter_out, 
+    torch::Tensor edge_weight, 
+    torch::Tensor edge_src, 
+    torch::Tensor edge_dst, 
+    torch::Tensor dst_ptr, 
+    torch::Tensor csr_perm, 
+    int64_t num_nodes, 
+    double cutoff, 
+    torch::Tensor src_ptr, 
+    torch::Tensor src_perm) 
+{
+    return FusedCSRCFConvFunction::apply(
+        x, filter_out, edge_weight, edge_src, edge_dst, dst_ptr, 
+        csr_perm, num_nodes, cutoff, src_ptr, src_perm);
 }
 
-// 推論時 (CUDA実行時) の実体を登録するブロック
-TORCH_LIBRARY_IMPL(my_graph_ops, CUDA, m) {
-    m.impl("calc_force", &calc_force_op);
-    m.impl("message_aggregate", &message_aggregate_op);
+TORCH_LIBRARY(flash_schnet_ext, m) {
+    m.def("fused_distance_gaussian_rbf_cutoff(Tensor pos, Tensor edge_src, Tensor edge_dst, Tensor centers, float gamma, float cutoff) -> Tensor[]");
+    m.def("fused_csr_cfconv(Tensor x, Tensor filter_out, Tensor edge_weight, Tensor edge_src, Tensor edge_dst, Tensor dst_ptr, Tensor csr_perm, int num_nodes, float cutoff, Tensor src_ptr, Tensor src_perm) -> Tensor");
+}
+
+TORCH_LIBRARY_IMPL(flash_schnet_ext, Autograd, m) {
+    m.impl("fused_distance_gaussian_rbf_cutoff", &fused_distance_gaussian_rbf_cutoff);
+    m.impl("fused_csr_cfconv", &fused_csr_cfconv);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
