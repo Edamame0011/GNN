@@ -4,141 +4,99 @@ namespace {
     constexpr float PI = 3.14159265f;
 
     __global__ void fused_distance_gaussian_rbf_cutoff_kernel(
-        const float* __restrict__ pos_ptr,      // (3, num_nodes)
-        const int64_t* __restrict__ edge_src_ptr,   // (num_edges)
-        const int64_t* __restrict__ edge_dst_ptr,   // (num_edges)
+        const float* __restrict__ edge_weight_ptr,      // (num_edges)
         const float* __restrict__ centers_ptr,  // (num_rbf)
-        float* __restrict__ dist_output_ptr,    // (num_edges)
         float* __restrict__ rbf_output_ptr,     // (num_edges, num_rbf)
         const float cutoff, 
         const float gamma, 
         const int num_edges, 
-        const int num_rbf, 
-        const int num_nodes
+        const int num_rbf
     ) {
-        int edge_idx = threadIdx.x + blockIdx.x * blockDim.x;
+        extern __shared__ float shared_centers[];
+        for (int i = threadIdx.x; i < num_rbf; i += blockDim.x) {
+            shared_centers[i] = centers_ptr[i];
+        }
+        __syncthreads();
+
+        const int edge_idx = threadIdx.x + blockIdx.x * blockDim.x;
 
         if (edge_idx >= num_edges) return;
 
-        int src_node = edge_src_ptr[edge_idx];
-        int dst_node = edge_dst_ptr[edge_idx];
+        const float dist = edge_weight_ptr[edge_idx];
+        const int base_offset = edge_idx * num_rbf;
 
-        const float src_x = pos_ptr[0 * num_nodes + src_node];
-        const float src_y = pos_ptr[1 * num_nodes + src_node];
-        const float src_z = pos_ptr[2 * num_nodes + src_node];
-
-        const float dst_x = pos_ptr[0 * num_nodes + dst_node];
-        const float dst_y = pos_ptr[1 * num_nodes + dst_node];
-        const float dst_z = pos_ptr[2 * num_nodes + dst_node];
-
-        const float dx = dst_x - src_x;
-        const float dy = dst_y - src_y;
-        const float dz = dst_z - src_z;
-
-        const float dist = sqrtf(dx * dx + dy * dy + dz * dz);
-
-        dist_output_ptr[edge_idx] = dist;
-
-        float cutoff_val = 0.0f;
         if (dist < cutoff) {
-            float cos_val = __cosf(dist * PI / cutoff);
-            cutoff_val = 0.5f * (cos_val + 1.0f); 
-        }
+            const float cos_val = __cosf(dist * PI / cutoff);
+            const float cutoff_val = 0.5f * (cos_val + 1.0f);
 
-        int base_offset = edge_idx * num_rbf;
-
-        for (int rbf_idx = 0; rbf_idx < num_rbf; rbf_idx ++) {
-            float center = centers_ptr[rbf_idx];
-            float diff = dist - center;
-            float rbf_val = expf(gamma * diff * diff) * cutoff_val;
-
-            rbf_output_ptr[base_offset + rbf_idx] = rbf_val;
+            for (int rbf_idx = 0; rbf_idx < num_rbf; rbf_idx ++) {
+                float center = shared_centers[rbf_idx];
+                float diff = dist - center;
+                rbf_output_ptr[base_offset + rbf_idx] = expf(gamma * diff * diff) * cutoff_val;
+            }
+        } else {
+            for (int rbf_idx = 0; rbf_idx < num_rbf; rbf_idx ++) {
+                rbf_output_ptr[base_offset + rbf_idx] = 0.0f;
+            }
         }
     }
 
-    __global__ void fused_distance_gaussian_rbf_cutoff_grad_pos_kernel(
-        const float* __restrict__ pos,
-        const int64_t* __restrict__ edge_src,
-        const int64_t* __restrict__ edge_dst,
-        const float* __restrict__ centers,
-        const float* __restrict__ distances,
-        const float* __restrict__ grad_distances,
-        const float* __restrict__ grad_rbf,
-        float* __restrict__ grad_pos,
-        float gamma,
-        float cutoff_upper,
+    __global__ void fused_distance_gaussian_rbf_cutoff_grad_edge_weight_kernel(
+        const float* __restrict__ edge_weight_ptr, 
+        const float* __restrict__ centers_ptr, 
+        const float* __restrict__ grad_rbf_ptr,
+        float* __restrict__ grad_edge_weight_ptr, 
+        float gamma, 
+        float cutoff,
         int num_edges,
-        int num_rbf, 
-        int num_nodes
+        int num_rbf
     ) {
-        int e = blockIdx.x * blockDim.x + threadIdx.x;
-        if (e >= num_edges) return;
+        extern __shared__ float shared_centers[];
+        for (int i = threadIdx.x; i < num_rbf; i += blockDim.x) {
+            shared_centers[i] = centers_ptr[i];
+        }
+        __syncthreads();
 
-        float dist = distances[e];
+        int edge_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (edge_idx >= num_edges) return;
 
-        if (dist >= cutoff_upper) return; 
+        float dist = edge_weight_ptr[edge_idx];
 
-        float dist_safe = fmaxf(dist, 1e-8f);
+        float grad_dist = 0.0f;
 
-        int src = edge_src[e];
-        int dst = edge_dst[e];
+        if (dist < cutoff) {
+            const float pi_over_cutoff = PI / cutoff;
+            const float dist_pi_over_cutoff = dist * pi_over_cutoff;
 
-        float dx = pos[0 * num_nodes + dst] - pos[0 * num_nodes + src];
-        float dy = pos[1 * num_nodes + dst] - pos[1 * num_nodes + src];
-        float dz = pos[2 * num_nodes + dst] - pos[2 * num_nodes + src];
+            const float cos_val = __cosf(dist_pi_over_cutoff);
+            const float cutoff_val = 0.5f * (cos_val + 1.0f);
+            const float d_cutoff_val = -0.5f * pi_over_cutoff * __sinf(dist_pi_over_cutoff);
 
-        float dir_x = dx / dist_safe;
-        float dir_y = dy / dist_safe;
-        float dir_z = dz / dist_safe;
+            const int base_offset = edge_idx * num_rbf;
 
-        float pi_over_c = PI / cutoff_upper;
-        float cos_val = __cosf(dist * pi_over_c);
-        float sin_val = __sinf(dist * pi_over_c);
-
-        float cutoff_val = 0.5f * (cos_val + 1.0f);
-        float d_cutoff_d_dist = -0.5f * pi_over_c * sin_val;
-
-        float grad_dist_from_rbf = 0.0f;
-        
-        if (grad_rbf != nullptr) {
-            for (int k = 0; k < num_rbf; ++k) {
-                float center = centers[k];
+            for (int rbf_idx = 0; rbf_idx < num_rbf; rbf_idx ++) {
+                float center = shared_centers[rbf_idx];
                 float diff = dist - center;
-                float exp_term = expf(gamma * diff * diff);
 
-                // Chain rule
-                float d_rbf_d_dist = 2.0f * gamma * diff * exp_term * cutoff_val + exp_term * d_cutoff_d_dist;
+                float rbf_val = expf(gamma * diff * diff);
+                float d_rbf_val = rbf_val * 2.0f * gamma * diff;
 
-                float g_rbf = grad_rbf[e * num_rbf + k];
-                grad_dist_from_rbf += g_rbf * d_rbf_d_dist;
+                float d_output = (d_rbf_val * cutoff_val) + (rbf_val * d_cutoff_val);
+
+                float grad_out = grad_rbf_ptr[base_offset + rbf_idx];
+                grad_dist += grad_out * d_output;
             }
         }
 
-        float total_grad_dist = grad_dist_from_rbf;
-        if (grad_distances != nullptr) {
-            total_grad_dist += grad_distances[e];
-        }
-
-        float grad_dr_x = total_grad_dist * dir_x;
-        float grad_dr_y = total_grad_dist * dir_y;
-        float grad_dr_z = total_grad_dist * dir_z;
-
-        atomicAdd(&grad_pos[0 * num_nodes + dst], grad_dr_x);
-        atomicAdd(&grad_pos[1 * num_nodes + dst], grad_dr_y);
-        atomicAdd(&grad_pos[2 * num_nodes + dst], grad_dr_z);
-
-        atomicAdd(&grad_pos[0 * num_nodes + src], -grad_dr_x);
-        atomicAdd(&grad_pos[1 * num_nodes + src], -grad_dr_y);
-        atomicAdd(&grad_pos[2 * num_nodes + src], -grad_dr_z);
+        grad_edge_weight_ptr[edge_idx] = grad_dist;
     }
 
     __global__ void fused_csr_cfconv_kernel(
         const float* x_ptr,             // (num_nodes, feat_dim)
         const float* filter_out_ptr,    // (num_edges, feat_dim)
         const float* edge_weight_ptr,   // (num_edges)
-        const int64_t* edge_src_ptr,        // (num_edges)
-        const int64_t* csr_perm_ptr,        // (num_edges)
-        const int64_t* dst_ptr_ptr,         // (num_nodes + 1)
+        const int32_t* edge_src_ptr,        // (num_edges)
+        const int32_t* dst_ptr_ptr,         // (num_nodes + 1)
         float* output_ptr,              // (num_nodes, feat_dim)
         const float cutoff, 
         const int num_nodes, 
@@ -150,73 +108,97 @@ namespace {
         int num_warps = (gridDim.x * blockDim.x) / 32;
 
         for (int node_idx = warp_id; node_idx < num_nodes; node_idx += num_warps) {
-            int seg_start = dst_ptr_ptr[node_idx];
-            int seg_end = dst_ptr_ptr[node_idx + 1];
+            int seg_start, seg_end;
 
-            for (int f = lane_id; f < feat_dim; f += 32) {
-                float acc = 0.0f;
+            if (lane_id == 0) {
+                seg_start = dst_ptr_ptr[node_idx];
+                seg_end = dst_ptr_ptr[node_idx + 1];
+            }
 
-                for (int e_csr = seg_start; e_csr < seg_end; e_csr ++) {
-                    int edge_idx = csr_perm_ptr[e_csr];
-                    float dist = edge_weight_ptr[edge_idx];
+            seg_start = __shfl_sync(0xffffffff, seg_start, 0);
+            seg_end = __shfl_sync(0xffffffff, seg_end, 0);
 
-                    if (dist < cutoff) {
-                        float C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
-                        int src_node = edge_src_ptr[edge_idx];
+            for (int base_f = 0; base_f < feat_dim; base_f += 32) {
+                int f = base_f + lane_id;
+                unsigned int active_mask = __ballot_sync(0xffffffff, f < feat_dim);
 
-                        float filter_val = filter_out_ptr[edge_idx * feat_dim + f];
-                        float x_j = x_ptr[src_node * feat_dim + f];
+                if (f < feat_dim) {
+                    float acc = 0.0f;
 
-                        acc += x_j * filter_val * C;
+                    for (int e_csr = seg_start; e_csr < seg_end; e_csr ++) {
+                        float dist = edge_weight_ptr[e_csr];
+
+                        if (dist < cutoff) {
+                            float C;
+                            if (lane_id == 0) {
+                                C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
+                            }
+                            C = __shfl_sync(0xffffffff, C, 0);
+
+                            int src_node = edge_src_ptr[e_csr];
+
+                            float filter_val = filter_out_ptr[e_csr * feat_dim + f];
+                            float x_j = x_ptr[src_node * feat_dim + f];
+
+                            acc += x_j * filter_val * C;
+                        }
                     }
-                }
 
-                output_ptr[node_idx * feat_dim + f] = acc;
+                    output_ptr[node_idx * feat_dim + f] = acc;
+                }
             }
         }
     }
 
-    __global__ void fused_src_csr_grad_x_kernel(
+    __global__ void fused_csr_grad_x_kernel(
         const float* __restrict__ grad_output_ptr, 
         const float* __restrict__ filter_out_ptr, 
         const float* __restrict__ edge_weight_ptr, 
-        const int64_t* __restrict__ edge_dst_ptr, 
-        const int64_t* __restrict__ src_perm_ptr, 
-        const int64_t* __restrict__ src_ptr_ptr, 
+        const int32_t* __restrict__ edge_src_ptr, 
+        const int32_t* __restrict__ edge_dst_ptr, 
         float* __restrict__ grad_x_ptr, 
         const float cutoff, 
-        const int num_nodes, 
+        const int num_edges, 
         const int feat_dim
     ) {
         int tid = threadIdx.x + blockDim.x * blockIdx.x;
         int warp_id = tid / 32;
         int lane_id = tid % 32;
 
-        if (warp_id >= num_nodes) return;
+        if (warp_id >= num_edges) return;
 
-        int seg_start = src_ptr_ptr[warp_id];
-        int seg_end = src_ptr_ptr[warp_id + 1];
+        int src_node, dst_node;
+        float dist;
+
+        if (lane_id == 0) {
+            src_node = edge_src_ptr[warp_id];
+            dst_node = edge_dst_ptr[warp_id];
+            dist = edge_weight_ptr[warp_id];
+        }
+
+        src_node = __shfl_sync(0xffffffff, src_node, 0);
+        dst_node = __shfl_sync(0xffffffff, dst_node, 0);
+        dist = __shfl_sync(0xffffffff, dist, 0);
+
+        if (dist >= cutoff) return;
+        
+        float C;
+        if (lane_id == 0) {
+            C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
+        }
+        C = __shfl_sync(0xffffffff, C, 0);
+
+        const int filter_offset = warp_id * feat_dim;
+        const int grad_out_offset = dst_node * feat_dim;
+        const int grad_x_offset = src_node * feat_dim;
 
         for (int f = lane_id; f < feat_dim; f += 32) {
-            float acc = 0.0f;
+            float filter_val = filter_out_ptr[filter_offset + f];
+            float W = filter_val * C;
+            float grad_out_val = grad_output_ptr[grad_out_offset + f];
+            float msg = grad_out_val * W;
 
-            for (int e_csr = seg_start; e_csr < seg_end; e_csr ++) {
-                int edge_idx = src_perm_ptr[e_csr];
-                int dst_node = edge_dst_ptr[edge_idx];
-                float dist = edge_weight_ptr[edge_idx];
-
-                if (dist < cutoff) {
-                    float C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
-
-                    float filter_val = filter_out_ptr[edge_idx * feat_dim + f];
-                    float W = filter_val * C;
-                    float grad_dst = grad_output_ptr[dst_node * feat_dim + f];
-
-                    acc += grad_dst * W;
-                }
-            }
-
-            grad_x_ptr[warp_id * feat_dim + f] = acc;
+            atomicAdd(&grad_x_ptr[grad_x_offset + f], msg);
         }
     }
 
@@ -224,8 +206,8 @@ namespace {
         const float* __restrict__ x_ptr,             // (num_nodes, feat_dim)
         const float* __restrict__ grad_output_ptr,   // (num_edges, feat_dim)
         const float* __restrict__ edge_weight_ptr,   // (num_edges)
-        const int64_t* __restrict__ edge_src_ptr,        // (num_edges)
-        const int64_t* __restrict__ edge_dst_ptr,        // (num_edges)
+        const int32_t* __restrict__ edge_src_ptr,        // (num_edges)
+        const int32_t* __restrict__ edge_dst_ptr,        // (num_edges)
         float* __restrict__ grad_filter_out_ptr,     // (num_edges, feat_dim)
         const float cutoff, 
         const int num_edges, 
@@ -235,110 +217,171 @@ namespace {
         size_t total_elements = num_edges * feat_dim;
 
         if (idx >= total_elements) return;
-            size_t edge_idx = idx / feat_dim;
-            size_t f = idx % feat_dim;
+        
+        size_t edge_idx = idx / feat_dim;
+        size_t f = idx % feat_dim;
 
-            float dist = edge_weight_ptr[edge_idx];
-            float C = 0.0f;
+        float dist = edge_weight_ptr[edge_idx];
+        float C = 0.0f;
 
-            if (dist < cutoff) {
-                C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
+        if (dist < cutoff) {
+            C = 0.5f * (__cosf(dist * PI / cutoff) + 1.0f);
+        }
+
+        int src_node = edge_src_ptr[edge_idx];
+        int dst_node = edge_dst_ptr[edge_idx];
+
+        float x_j = x_ptr[src_node * feat_dim + f];
+        float grad_j = grad_output_ptr[dst_node * feat_dim + f];
+
+        float grad_filter = x_j * grad_j * C;
+
+        grad_filter_out_ptr[idx] = grad_filter;
+    }
+
+    __global__ void fused_grad_edge_weight_kernel(
+        const float* grad_output_ptr,   // (num_nodes, feat_dim)
+        const float* x_ptr,             // (num_nodes, feat_dim)
+        const float* filter_out_ptr,    // (num_edges, feat_dim)
+        const float* edge_weight_ptr,   // (num_edges)          
+        const int32_t* edge_src_ptr,    // (num_edges)          
+        const int32_t* dst_ptr_ptr,     // (num_nodes + 1)      
+        float* grad_edge_weight_ptr,    // (num_edges)          
+        const float cutoff, 
+        const int num_nodes, 
+        const int feat_dim
+    ) {
+        int tid = threadIdx.x + blockDim.x * blockIdx.x;
+        int warp_id = tid / 32;
+        int lane_id = tid % 32;
+        int num_warps = (gridDim.x * blockDim.x) / 32;
+
+        for (int node_idx = warp_id; node_idx < num_nodes; node_idx += num_warps) {
+            int seg_start, seg_end;
+
+            if (lane_id == 0) {
+                seg_start = dst_ptr_ptr[node_idx];
+                seg_end = dst_ptr_ptr[node_idx + 1];
             }
+            seg_start = __shfl_sync(0xffffffff, seg_start, 0);
+            seg_end = __shfl_sync(0xffffffff, seg_end, 0);
 
-            int src_node = edge_src_ptr[edge_idx];
-            int dst_node = edge_dst_ptr[edge_idx];
+            for (int e_csr = seg_start; e_csr < seg_end; e_csr++) {
+                float dist;
+                if (lane_id == 0) {
+                    dist = edge_weight_ptr[e_csr];
+                }
+                dist = __shfl_sync(0xffffffff, dist, 0);
 
-            float x_j = x_ptr[src_node * feat_dim + f];
-            float grad_j = grad_output_ptr[dst_node * feat_dim + f];
+                if (dist < cutoff) {
+                    float dC_ddist;
+                    int src_node;
 
-            float grad_filter = x_j * grad_j * C;
+                    if (lane_id == 0) {
+                        dC_ddist = -0.5f * (PI / cutoff) * __sinf(dist * PI / cutoff);
+                        src_node = edge_src_ptr[e_csr];
+                    }
+                    dC_ddist = __shfl_sync(0xffffffff, dC_ddist, 0);
+                    src_node = __shfl_sync(0xffffffff, src_node, 0);
 
-            grad_filter_out_ptr[idx] = grad_filter;
+                    float sum_f = 0.0f;
+
+                    for (int base_f = 0; base_f < feat_dim; base_f += 32) {
+                        int f = base_f + lane_id;
+
+                        if (f < feat_dim) {
+                            float grad_out = grad_output_ptr[node_idx * feat_dim + f];
+                            float filter_val = filter_out_ptr[e_csr * feat_dim + f];
+                            float x_j = x_ptr[src_node * feat_dim + f];
+
+                            sum_f += grad_out * x_j * filter_val;
+                        }
+                    }
+
+                    for (int offset = 16; offset > 0; offset /= 2) {
+                        sum_f += __shfl_down_sync(0xffffffff, sum_f, offset);
+                    }
+
+                    if (lane_id == 0) {
+                        grad_edge_weight_ptr[e_csr] = sum_f * dC_ddist;
+                    }
+                } else {
+                    if (lane_id == 0) {
+                        grad_edge_weight_ptr[e_csr] = 0.0f;
+                    }
+                }
+            }
+        }
     }
 }
 
 namespace FlashSchNet::kernels {
-    std::tuple<torch::Tensor, torch::Tensor> fused_distance_gaussian_rbf_cutoff(
-        torch::Tensor pos, 
-        torch::Tensor edge_src, 
-        torch::Tensor edge_dst, 
-        torch::Tensor centers, 
+    torch::Tensor fused_distance_gaussian_rbf_cutoff(
+        const torch::Tensor& edge_weight, 
+        const torch::Tensor& centers, 
         float gamma, 
         float cutoff
     ) {
-        int num_edges = edge_src.size(0);
+        int num_edges = edge_weight.size(0);
         int num_rbf = centers.size(0);
-        int num_nodes = pos.size(1);
 
-        auto opt = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
-        auto distances = torch::empty({num_edges}, opt);
-        auto rbf_output = torch::empty({num_edges, num_rbf}, opt);
+        auto rbf_output = torch::empty({num_edges, num_rbf}, edge_weight.options());
 
-        if (num_edges == 0) return std::make_tuple(distances, rbf_output);
+        if (num_edges == 0) return rbf_output;
 
         int num_threads = 256;
         int num_blocks = (num_threads + num_edges - 1) / num_threads;
+        size_t shared_mem_size = num_rbf * sizeof(float);
 
-        fused_distance_gaussian_rbf_cutoff_kernel<<<num_blocks, num_threads>>>(
-            pos.data_ptr<float>(), 
-            edge_src.data_ptr<int64_t>(), 
-            edge_dst.data_ptr<int64_t>(), 
+        fused_distance_gaussian_rbf_cutoff_kernel<<<num_blocks, num_threads, shared_mem_size>>>(
+            edge_weight.data_ptr<float>(), 
             centers.data_ptr<float>(), 
-            distances.data_ptr<float>(), 
             rbf_output.data_ptr<float>(), 
             cutoff, 
             gamma, 
             num_edges, 
-            num_rbf, 
-            num_nodes
+            num_rbf
         );
 
-        return std::make_tuple(distances, rbf_output);
+        return rbf_output;
     }
 
-    void fused_distance_gaussian_rbf_cutoff_grad_pos(
-        torch::Tensor pos,
-        torch::Tensor edge_src,
-        torch::Tensor edge_dst,
-        torch::Tensor centers,
-        torch::Tensor distances,
-        torch::Tensor grad_distances,
-        torch::Tensor grad_rbf,
-        torch::Tensor grad_pos,
+    torch::Tensor fused_distance_gaussian_rbf_cutoff_grad_pos(
+        const torch::Tensor& edge_weight,
+        const torch::Tensor& centers,
+        const torch::Tensor& grad_rbf, 
         float gamma,
         float cutoff
     ) {
-        int num_edges = edge_src.size(0);
+        int num_edges = edge_weight.size(0);
         int num_rbf = centers.size(0);
-        int num_nodes = pos.size(1);
+
+        auto grad_edge_weight = torch::empty({num_edges}, edge_weight.options());
 
         int num_threads = 256;
         int num_blocks = (num_threads + num_edges - 1) / num_threads;
+        size_t shared_mem_size = num_rbf * sizeof(float);
 
-        fused_distance_gaussian_rbf_cutoff_grad_pos_kernel<<<num_blocks, num_threads>>>(
-            pos.data_ptr<float>(), 
-            edge_src.data_ptr<int64_t>(), 
-            edge_dst.data_ptr<int64_t>(), 
+        fused_distance_gaussian_rbf_cutoff_grad_edge_weight_kernel<<<num_blocks, num_threads, shared_mem_size>>>(
+            edge_weight.data_ptr<float>(), 
             centers.data_ptr<float>(), 
-            distances.data_ptr<float>(), 
-            grad_distances.data_ptr<float>(), 
             grad_rbf.data_ptr<float>(), 
-            grad_pos.data_ptr<float>(), 
+            grad_edge_weight.data_ptr<float>(), 
             gamma, 
             cutoff, 
             num_edges, 
-            num_rbf, 
-            num_nodes
+            num_rbf
         );
+
+        return grad_edge_weight;
     }
 
     torch::Tensor fused_csr_cfconv(
-        torch::Tensor x, 
-        torch::Tensor filter_out, 
-        torch::Tensor edge_weight, 
-        torch::Tensor edge_src, 
-        torch::Tensor dst_ptr, 
-        torch::Tensor csr_perm, 
+        const torch::Tensor& x, 
+        const torch::Tensor& filter_out, 
+        const torch::Tensor& edge_weight, 
+        const torch::Tensor& edge_src, 
+        const torch::Tensor& dst_ptr, 
         int num_nodes, 
         float cutoff
     ) {
@@ -354,9 +397,8 @@ namespace FlashSchNet::kernels {
             x.data_ptr<float>(), 
             filter_out.data_ptr<float>(), 
             edge_weight.data_ptr<float>(), 
-            edge_src.data_ptr<int64_t>(), 
-            csr_perm.data_ptr<int64_t>(), 
-            dst_ptr.data_ptr<int64_t>(), 
+            edge_src.data_ptr<int32_t>(), 
+            dst_ptr.data_ptr<int32_t>(), 
             output.data_ptr<float>(), 
             cutoff, 
             num_nodes, 
@@ -366,33 +408,32 @@ namespace FlashSchNet::kernels {
         return output;
     }
 
-    torch::Tensor fused_src_csr_grad_x(
-        torch::Tensor grad_output, 
-        torch::Tensor filter_out, 
-        torch::Tensor edge_weight, 
-        torch::Tensor edge_dst, 
-        torch::Tensor src_ptr, 
-        torch::Tensor src_perm, 
+    torch::Tensor fused_csr_grad_x(
+        const torch::Tensor& grad_output, 
+        const torch::Tensor& filter_out, 
+        const torch::Tensor& edge_weight, 
+        const torch::Tensor& edge_src, 
+        const torch::Tensor& edge_dst, 
         int num_nodes, 
         float cutoff
     ) {
         int feat_dim = grad_output.size(1);
+        int num_edges = edge_src.size(0);
         auto grad_x = torch::zeros({num_nodes, feat_dim}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
 
         int num_threads = 256;
         int num_warps = num_threads / 32;
-        int num_blocks = (num_warps + num_nodes - 1) / num_warps;
+        int num_blocks = (num_warps + num_edges - 1) / num_warps;
 
-        fused_src_csr_grad_x_kernel<<<num_blocks, num_threads>>>(
+        fused_csr_grad_x_kernel<<<num_blocks, num_threads>>>(
             grad_output.data_ptr<float>(), 
             filter_out.data_ptr<float>(), 
             edge_weight.data_ptr<float>(), 
-            edge_dst.data_ptr<int64_t>(), 
-            src_perm.data_ptr<int64_t>(), 
-            src_ptr.data_ptr<int64_t>(), 
+            edge_src.data_ptr<int32_t>(), 
+            edge_dst.data_ptr<int32_t>(), 
             grad_x.data_ptr<float>(), 
             cutoff, 
-            num_nodes, 
+            num_edges, 
             feat_dim
         );
 
@@ -400,11 +441,11 @@ namespace FlashSchNet::kernels {
     }
 
     torch::Tensor fused_grad_filter_out(
-        torch::Tensor x, 
-        torch::Tensor grad_output, 
-        torch::Tensor edge_weight, 
-        torch::Tensor edge_src, 
-        torch::Tensor edge_dst, 
+        const torch::Tensor& x, 
+        const torch::Tensor& grad_output, 
+        const torch::Tensor& edge_weight, 
+        const torch::Tensor& edge_src, 
+        const torch::Tensor& edge_dst, 
         float cutoff
     ) {
         int feat_dim = x.size(1);
@@ -420,8 +461,8 @@ namespace FlashSchNet::kernels {
             x.data_ptr<float>(), 
             grad_output.data_ptr<float>(), 
             edge_weight.data_ptr<float>(), 
-            edge_src.data_ptr<int64_t>(), 
-            edge_dst.data_ptr<int64_t>(), 
+            edge_src.data_ptr<int32_t>(), 
+            edge_dst.data_ptr<int32_t>(), 
             grad_filter_out.data_ptr<float>(), 
             cutoff, 
             num_edges, 
@@ -429,5 +470,39 @@ namespace FlashSchNet::kernels {
         );
 
         return grad_filter_out;
+    }
+
+    torch::Tensor fused_grad_edge_weight(
+        const torch::Tensor& grad_output, 
+        const torch::Tensor& x, 
+        const torch::Tensor& filter_out, 
+        const torch::Tensor& edge_weight, 
+        const torch::Tensor& edge_src, 
+        const torch::Tensor& dst_ptr, 
+        int num_nodes, 
+        float cutoff
+    ) {
+        int feat_dim = x.size(1);
+
+        auto grad_edge_weight = torch::empty_like(edge_weight);
+
+        int num_threads = 256;
+        int num_warps = num_threads / 32;
+        int num_blocks = (num_warps + num_nodes - 1) / num_warps;
+
+        fused_grad_edge_weight_kernel<<<num_blocks, num_threads>>>(
+            grad_output.data_ptr<float>(), 
+            x.data_ptr<float>(), 
+            filter_out.data_ptr<float>(), 
+            edge_weight.data_ptr<float>(), 
+            edge_src.data_ptr<int32_t>(), 
+            dst_ptr.data_ptr<int32_t>(), 
+            grad_edge_weight.data_ptr<float>(), 
+            cutoff, 
+            num_nodes, 
+            feat_dim
+        );
+
+        return grad_edge_weight;
     }
 }

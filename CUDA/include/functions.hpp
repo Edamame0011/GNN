@@ -6,12 +6,10 @@
 namespace FlashSchNet::functions {
     class FusedDistanceGaussianRBFCutoffFunction : public torch::autograd::Function<FusedDistanceGaussianRBFCutoffFunction> {
         public:
-            static std::vector<torch::Tensor> forward(
+            static torch::Tensor forward(
                 torch::autograd::AutogradContext *ctx, 
-                torch::Tensor pos, 
-                torch::Tensor edge_src, 
-                torch::Tensor edge_dst, 
-                torch::Tensor centers, 
+                const torch::Tensor& edge_weight, 
+                const torch::Tensor& centers, 
                 float gamma, 
                 float cutoff
             );
@@ -26,17 +24,14 @@ namespace FlashSchNet::functions {
         public:
             static torch::Tensor forward(
                 torch::autograd::AutogradContext *ctx, 
-                torch::Tensor x, 
-                torch::Tensor filter_out, 
-                torch::Tensor edge_weight, 
-                torch::Tensor edge_src, 
-                torch::Tensor edge_dst, 
-                torch::Tensor dst_ptr, 
-                torch::Tensor csr_perm, 
+                const torch::Tensor& x, 
+                const torch::Tensor& filter_out, 
+                const torch::Tensor& edge_weight, 
+                const torch::Tensor& edge_src, 
+                const torch::Tensor& edge_dst, 
+                const torch::Tensor& dst_ptr, 
                 int num_nodes, 
-                float cutoff, 
-                torch::Tensor src_ptr, 
-                torch::Tensor src_perm
+                float cutoff
             );
 
             static torch::autograd::variable_list backward(

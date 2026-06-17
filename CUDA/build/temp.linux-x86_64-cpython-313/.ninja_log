@@ -1,0 +1,6 @@
+# ninja log v5
+1	11938	1781685329844692984	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/home/nozawa/SchNet/CUDA/src/functions.o	4450fab6fe84d592
+0	14045	1781685331955704120	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/home/nozawa/SchNet/CUDA/binding.o	dfe06e635786d4c0
+1	30606	1781685348510791451	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/home/nozawa/SchNet/CUDA/src/kernels.o	9a767bd140676b56
+11	10847	1781686514145850643	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/home/nozawa/SchNet/CUDA/src/functions.o	4450fab6fe84d592
+14	28875	1781686532167939345	/home/nozawa/SchNet/CUDA/build/temp.linux-x86_64-cpython-313/home/nozawa/SchNet/CUDA/src/kernels.o	9a767bd140676b56

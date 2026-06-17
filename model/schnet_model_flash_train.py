@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from model.schnet_model import SchNet_dict, GaussianRBF, ShiftedSoftplus, TypeEmbedding, CutoffFunction
 from typing import Optional
-import flash_schnet_ext
+from utils.MyGraphFunction import fused_distance_gaussian_rbf_cutoff, fused_csr_cfconv
 
 #Interactionレイヤー
 class InteractionBlock(nn.Module):
@@ -26,9 +26,6 @@ class InteractionBlock(nn.Module):
             edge_src: torch.Tensor, 
             edge_dst: torch.Tensor, 
             dst_ptr: torch.Tensor, 
-            csr_perm: torch.Tensor, 
-            src_ptr: torch.Tensor, 
-            src_perm: torch.Tensor, 
             num_nodes: int, 
             cutoff: float
         ):
@@ -36,18 +33,15 @@ class InteractionBlock(nn.Module):
         filter_out = self.mlp(rbf_expansion)
         x_v = self.lin1(x)
 
-        conv_out = flash_schnet_ext.fused_csr_cfconv(
+        conv_out = fused_csr_cfconv(
             x_v, 
             filter_out, 
             edge_weight, 
             edge_src, 
             edge_dst, 
             dst_ptr, 
-            csr_perm, 
             num_nodes, 
-            cutoff, 
-            src_ptr, 
-            src_perm
+            cutoff
         )
 
         h = self.act(self.lin2(conv_out))
@@ -83,52 +77,54 @@ class SchNetModel(nn.Module):
     def forward(
             self, 
             x: torch.Tensor, 
-            pos: torch.Tensor, 
             edge_index: torch.Tensor, 
+            edge_weight: torch.Tensor, 
             batch: Optional[torch.Tensor] = None
         ):
-        pos.requires_grad_(True)
+        edge_weight.requires_grad_(True)
 
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
 
-        i = edge_index[0]
-        j = edge_index[1]
+        i = edge_index[0].to(torch.int32)
+        j = edge_index[1].to(torch.int32)
 
         # CSR形式への変換
         num_nodes = x.size(0)
 
         # dst (i) に対する並び替えインデックスとポインタの作成
-        csr_perm = torch.argsort(i)
         dst_counts = torch.bincount(i, minlength=num_nodes)
-        dst_ptr = torch.zeros(num_nodes + 1, dtype=torch.long, device=i.device)
+        dst_ptr = torch.zeros(num_nodes + 1, dtype=torch.int32, device=i.device)
         dst_ptr[1:] = torch.cumsum(dst_counts, dim=0)
-
-        # src (j) に対する並び替えインデックスとポインタの作成
-        src_perm = torch.argsort(j)
-        src_counts = torch.bincount(j, minlength=num_nodes)
-        src_ptr = torch.zeros(num_nodes + 1, dtype=torch.long, device=j.device)
-        src_ptr[1:] = torch.cumsum(src_counts, dim=0)
-        distances, rbf_expansion = flash_schnet_ext.fused_distance_gaussian_rbf_cutoff(
-            pos, i, j, self.centers, self.gamma, self.cutoff
+        
+        rbf_expansion = fused_distance_gaussian_rbf_cutoff(
+            edge_weight, self.centers, self.gamma, self.cutoff
         )
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, csr_perm, src_ptr, src_perm, num_nodes, self.cutoff)
+            h = interaction(h, rbf_expansion, edge_weight, i, j, dst_ptr, num_nodes, self.cutoff)
 
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
 
-        forces = -torch.autograd.grad([energy.sum()], [pos], create_graph=True)[0] #(3, num_edges)
-        assert forces is not None
+        diff_E = torch.autograd.grad([energy.sum()], [edge_weight], create_graph=True)[0] #(3, num_edges)
+        assert diff_E is not None
 
+        #forces: 力を受ける側の粒子が受ける力 (3, N)
+        forces = x.new_zeros(3, x.size(0), dtype=edge_weight.dtype)
+        forces.index_add_(1, i, diff_E)
+        forces.index_add_(1, j, -diff_E)
+        
+        #バッチごとに集約
+        #ここで、batchは、それぞれのノードが所属するサンプル番号を表す1次元テンソル。ノードkは、batch[k]に属する。
         if batch is not None:
             batch_max = batch.max()
+            #total_energy[k]: k番目のサンプルのエネルギー
             total_energy = torch.zeros(batch_max + 1, device=energy.device)
             total_energy = total_energy.index_add_(0, batch, energy.squeeze(-1))
         
         else:
-            total_energy = energy.sum()
-
+            total_energy = energy.sum() #全ノードの合計エネルギー
+        
         return total_energy, forces

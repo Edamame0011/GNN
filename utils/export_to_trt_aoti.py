@@ -8,6 +8,7 @@ import argparse
 from torch.func import functional_call, grad
 from torch.fx.experimental.proxy_tensor import make_fx
 import torch_tensorrt
+import gc
 
 # エネルギーのみを計算するモデル
 class SchNetModel(nn.Module):
@@ -151,8 +152,8 @@ def main():
         return total_energy, forces
 
     # ダミー入力
-    num_nodes = 1800
-    num_edges = 65000
+    num_nodes = 10
+    num_edges = 128
     x = torch.randint(0, 100, (num_nodes, ), dtype=torch.long, device=device)
     edge_index = torch.randint(0, num_nodes, (2, num_edges), dtype=torch.long, device=device)
     edge_weight = torch.randn(3, num_edges, dtype=torch.float, device=device)
@@ -164,10 +165,11 @@ def main():
     wrapper.eval()
 
     # 要素数が可変な要素の設定
+    num_nodes = torch.export.Dim("num_nodes", min=1)
     num_edges = torch.export.Dim("num_edges", min=1)
     
     dynamic_shapes = (
-        None, # data.x (num_nodes, )
+        {0: num_nodes}, # data.x (num_nodes, )
         {1: num_edges}, # data.edge_index (2, num_edges)
         {1: num_edges}, # data.edge_weight (3, num_edges)
     )
@@ -178,15 +180,21 @@ def main():
         args=(x, edge_index, edge_weight), 
         dynamic_shapes=dynamic_shapes
     )
+
+    del model, wrapper, traced_graph, state_dict, param_dict, buffer_dict
+    gc.collect()
+    torch.cuda.empty_cache()
+
     trt_compiled = torch_tensorrt.compile(
         exported_program, 
+        ir="dynamo", 
         inputs=[
             torch_tensorrt.Input(
                 shape=(1800, ), 
                 dtype=torch.int64
             ), 
             torch_tensorrt.Input(
-                min_shape=(2, 60000), 
+                min_shape=(2, 1), 
                 opt_shape=(2, 65000), 
                 max_shape=(2, 70000)
             ), 
@@ -196,9 +204,29 @@ def main():
                 max_shape=(3, 70000)
             )
         ], 
-        workspace_size=20 << 30
+        workspace_size=4 << 30
     )
-    torch.jit.save(trt_compiled, output_path)
+    torch_tensorrt.save(
+            trt_compiled, 
+            output_path, 
+            output_format="aot_inductor", 
+            inputs=[
+                torch_tensorrt.Input(
+                    shape=(1800, ), 
+                    dtype=torch.int64
+                ), 
+                torch_tensorrt.Input(
+                    min_shape=(2, 1), 
+                    opt_shape=(2, 65000), 
+                    max_shape=(2, 70000)
+                ), 
+                torch_tensorrt.Input(
+                    min_shape=(3, 1), 
+                    opt_shape=(3, 65000), 
+                    max_shape=(3, 70000)
+                )
+            ]
+        )
     print(f"モデルが正常に {output_path} へエクスポートされました。")
 
 if __name__ == "__main__":

@@ -5,39 +5,42 @@
 
 using namespace FlashSchNet::functions;
 
-std::vector<torch::Tensor> fused_distance_gaussian_rbf_cutoff(
-    torch::Tensor pos, 
-    torch::Tensor edge_src, 
-    torch::Tensor edge_dst, 
-    torch::Tensor centers, 
+#define CHECK_INT32(x) TORCH_CHECK(x.scalar_type() == torch::kInt32, #x " must be an int32 tensor")
+
+torch::Tensor fused_distance_gaussian_rbf_cutoff(
+    const torch::Tensor& edge_weight, 
+    const torch::Tensor& centers, 
     double gamma, 
-    double cutoff) 
-{
+    double cutoff
+) {
     return FusedDistanceGaussianRBFCutoffFunction::apply(
-        pos, edge_src, edge_dst, centers, gamma, cutoff);
+        edge_weight, centers, (float)gamma, (float)cutoff
+    );
 }
 
 torch::Tensor fused_csr_cfconv(
-    torch::Tensor x, 
-    torch::Tensor filter_out, 
-    torch::Tensor edge_weight, 
-    torch::Tensor edge_src, 
-    torch::Tensor edge_dst, 
-    torch::Tensor dst_ptr, 
-    torch::Tensor csr_perm, 
+    const torch::Tensor& x, 
+    const torch::Tensor& filter_out, 
+    const torch::Tensor& edge_weight, 
+    const torch::Tensor& edge_src, 
+    const torch::Tensor& edge_dst, 
+    const torch::Tensor& dst_ptr, 
     int64_t num_nodes, 
-    double cutoff, 
-    torch::Tensor src_ptr, 
-    torch::Tensor src_perm) 
-{
+    double cutoff
+) {
+    CHECK_INT32(edge_src);
+    CHECK_INT32(edge_dst);
+    CHECK_INT32(dst_ptr);
+
     return FusedCSRCFConvFunction::apply(
         x, filter_out, edge_weight, edge_src, edge_dst, dst_ptr, 
-        csr_perm, num_nodes, cutoff, src_ptr, src_perm);
+        (int)num_nodes, (float)cutoff
+    );
 }
 
 TORCH_LIBRARY(flash_schnet_ext, m) {
-    m.def("fused_distance_gaussian_rbf_cutoff(Tensor pos, Tensor edge_src, Tensor edge_dst, Tensor centers, float gamma, float cutoff) -> Tensor[]");
-    m.def("fused_csr_cfconv(Tensor x, Tensor filter_out, Tensor edge_weight, Tensor edge_src, Tensor edge_dst, Tensor dst_ptr, Tensor csr_perm, int num_nodes, float cutoff, Tensor src_ptr, Tensor src_perm) -> Tensor");
+    m.def("fused_distance_gaussian_rbf_cutoff(Tensor edge_weight, Tensor centers, float gamma, float cutoff) -> Tensor");
+    m.def("fused_csr_cfconv(Tensor x, Tensor filter_out, Tensor edge_weight, Tensor edge_src, Tensor edge_dst, Tensor dst_ptr, int num_nodes, float cutoff) -> Tensor");
 }
 
 TORCH_LIBRARY_IMPL(flash_schnet_ext, Autograd, m) {
