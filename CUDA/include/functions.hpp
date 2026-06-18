@@ -30,7 +30,6 @@ namespace FlashSchNet::functions {
                 const torch::Tensor& edge_src, 
                 const torch::Tensor& edge_dst, 
                 const torch::Tensor& dst_ptr, 
-                int num_nodes, 
                 float cutoff
             );
 

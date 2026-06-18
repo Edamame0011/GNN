@@ -10,7 +10,7 @@ setup(
     version='0.1.0',
     ext_modules=[
         CUDAExtension(
-            name=module_name, # これが C++側の TORCH_EXTENSION_NAME になります
+            name=module_name, 
             sources=[
                 os.path.join(current_dir, 'binding.cpp'),
                 os.path.join(current_dir, 'src', 'functions.cpp'),

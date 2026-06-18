@@ -109,7 +109,7 @@ class SchNetModel(nn.Module):
 
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, num_nodes, self.cutoff)
+            h = interaction(h, rbf_expansion, distances, j, i, dst_ptr, num_nodes, self.cutoff)
 
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)

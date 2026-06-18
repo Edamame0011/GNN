@@ -26,21 +26,19 @@ class InteractionBlock(nn.Module):
             edge_src: torch.Tensor, 
             edge_dst: torch.Tensor, 
             dst_ptr: torch.Tensor, 
-            num_nodes: int, 
             cutoff: float
         ):
         #フィルターの生成
         filter_out = self.mlp(rbf_expansion)
         x_v = self.lin1(x)
 
-        conv_out = torch.ops.flash_schnet_ext.fused_csr_cfconv(
+        conv_out = fused_csr_cfconv(
             x_v, 
             filter_out, 
             edge_weight, 
             edge_src, 
             edge_dst, 
             dst_ptr, 
-            num_nodes, 
             cutoff
         )
 
@@ -81,31 +79,27 @@ class SchNetModel(nn.Module):
             edge_weight: torch.Tensor, 
             dst_ptr: torch.Tensor
         ):
-        edge_weight.requires_grad_(True)
-
         #埋め込み
         h = self.embedding(x) #(N, hidden_dim)
 
         i = edge_index[0]
         j = edge_index[1]
-
+        
         distances = torch.norm(edge_weight, dim=0)
 
         rbf_expansion = fused_distance_gaussian_rbf_cutoff(
             distances, self.centers, self.gamma, self.cutoff
         )
 
-        num_nodes = x.size(0)
-
         #Interactionレイヤー
         for interaction in self.interactions:
-            h = interaction(h, rbf_expansion, distances, i, j, dst_ptr, num_nodes, self.cutoff)
+            h = interaction(h, rbf_expansion, distances, j, i, dst_ptr, self.cutoff)
 
         #各粒子のエネルギー
         energy = self.output(h) #(N, 1)
         total_energy = energy.sum()
 
-        diff_E = torch.autograd.grad([total_energy], [edge_weight], create_graph=False)[0] #(3, num_edges)
+        diff_E = torch.autograd.grad([total_energy], [edge_weight], create_graph=True)[0] #(3, num_edges)
         assert diff_E is not None
 
         #forces: 力を受ける側の粒子が受ける力 (3, N)

@@ -62,14 +62,12 @@ namespace FlashSchNet::functions {
         const torch::Tensor& edge_src, 
         const torch::Tensor& edge_dst, 
         const torch::Tensor& dst_ptr, 
-        int num_nodes, 
         float cutoff
     ) {
         ctx->save_for_backward({x, filter_out, edge_weight, edge_src, edge_dst, dst_ptr});
-        ctx->saved_data["num_nodes"] = num_nodes;
         ctx->saved_data["cutoff"] = cutoff;
 
-        auto out = kernels::fused_csr_cfconv(x, filter_out, edge_weight, edge_src, dst_ptr, num_nodes, cutoff);
+        auto out = kernels::fused_csr_cfconv(x, filter_out, edge_weight, edge_src, dst_ptr, cutoff);
 
         return out;
     }
@@ -88,7 +86,6 @@ namespace FlashSchNet::functions {
         auto edge_dst = saved[4];
         auto dst_ptr = saved[5];
 
-        int num_nodes = ctx->saved_data["num_nodes"].toInt();
         float cutoff = (float)ctx->saved_data["cutoff"].toDouble();
 
         torch::Tensor grad_x, grad_filter_out, grad_edge_weight;
@@ -100,7 +97,6 @@ namespace FlashSchNet::functions {
                 edge_weight, 
                 edge_src, 
                 edge_dst, 
-                num_nodes, 
                 cutoff
             );
         }
@@ -124,7 +120,6 @@ namespace FlashSchNet::functions {
                 edge_weight, 
                 edge_src, 
                 dst_ptr, 
-                num_nodes, 
                 cutoff
             );
         }
