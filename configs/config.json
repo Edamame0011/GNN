@@ -10,5 +10,5 @@
     "hidden_dim": 100,
     "num_filters": 100,
     "data_path": "data/data.pt", 
-    "output_name": "model_schnet_csr"
+    "output_name": "model_gnnff"
 }

@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import random
 import json
-from model.schnet_model_flash_train import SchNetModel
+from model.gnnff_model import GNNFF
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 from torch.optim import AdamW
@@ -11,7 +11,6 @@ from torch.optim.lr_scheduler import StepLR
 from tensorboardX import SummaryWriter
 import argparse
 from utils.preprocess import CustomData
-from tqdm import tqdm
 
 #シードを設定する関数
 def set_seed(seed):
@@ -25,61 +24,42 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 #訓練ループ
-def train(model, criterion, energy_weight, force_weight, dataloader, optimizer, device):
+def train(model, criterion, dataloader, optimizer, device):
     model.train()
     loss_total = 0
-    loss_e_total = 0
-    loss_f_total = 0
 
     for batch in dataloader:
         batch = batch.to(device)
         optimizer.zero_grad()
-        energies, forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
+        forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
 
-        print("Forces requires grad:", forces.requires_grad)
+        l = criterion(forces, batch.forces)
 
-        loss_e = criterion(energies, batch.y)
-        loss_f = criterion(forces, batch.forces)
-
-        l = loss_e * energy_weight + loss_f * force_weight
         l.backward()
         optimizer.step()
 
         loss_total += l.item()
-        loss_e_total += loss_e.item()
-        loss_f_total += loss_f.item()
     
     loss_total = loss_total / len(dataloader)
-    loss_e_total = loss_e_total / len(dataloader)
-    loss_f_total = loss_f_total / len(dataloader)
     
-    return loss_total, loss_e_total, loss_f_total
+    return loss_total
 
 #評価ループ
-def evaluate(model, criterion, energy_weight, force_weight, dataloader, device):
+def evaluate(model, criterion, dataloader, device):
     model.eval()
     loss_total = 0
-    loss_e_total = 0
-    loss_f_total = 0
 
     for batch in dataloader:
         batch = batch.to(device)
-        energies, forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
+        forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
 
-        loss_e = criterion(energies, batch.y)
-        loss_f = criterion(forces, batch.forces)
-
-        l = loss_e * energy_weight + loss_f * force_weight
+        l = criterion(forces, batch.forces)
 
         loss_total += l.item()
-        loss_e_total += loss_e.item()
-        loss_f_total += loss_f.item()
     
     loss_total = loss_total / len(dataloader)
-    loss_e_total = loss_e_total / len(dataloader)
-    loss_f_total = loss_f_total / len(dataloader)
 
-    return loss_total, loss_e_total, loss_f_total
+    return loss_total
 
 #データセットの読み込み
 def make_dataloaders(path, batch_size):
@@ -116,8 +96,6 @@ def main():
     lr                  = config["lr"]
     epochs              = config["epochs"]
     num_interactions    = config["num_interactions"]
-    energy_weight       = config["energy_weight"]
-    force_weight        = config["force_weight"]
     cutoff              = config["cutoff"]
     num_gaussians       = config["num_gaussians"]
     hidden_dim          = config["hidden_dim"]
@@ -134,12 +112,11 @@ def main():
     train_dataloader, test_dataloader = make_dataloaders(data_path, batch_size)
 
     #モデルの作成
-    model = SchNetModel(hidden_dim = hidden_dim, num_gaussians = num_gaussians, 
-                        num_filters = num_filters, num_interactions = num_interactions, cutoff = cutoff)
+    model = GNNFF(
+        hidden_dim = hidden_dim, num_gaussians = num_gaussians, 
+        num_filters = num_filters, num_interactions = num_interactions, cutoff = cutoff
+    )
     model = model.to(device)
-
-    force_weight = torch.tensor(force_weight).to(device)
-    energy_weight = torch.tensor(energy_weight).to(device)
 
     #モデルの学習
     writer = SummaryWriter()
@@ -147,34 +124,30 @@ def main():
     scheduler = StepLR(optimizer, step_size = 100, gamma = 0.5)
     criterion = MSELoss()
 
-    for epoch in tqdm(range(epochs)):
+    for epoch in range(epochs):
         #学習
-        loss_total, loss_e_total, loss_f_total = train(model = model, 
-                                                       criterion = criterion, 
-                                                       energy_weight = energy_weight, 
-                                                       force_weight = force_weight, 
-                                                       dataloader = train_dataloader, 
-                                                       optimizer = optimizer, 
-                                                       device = device)
+        loss_total = train(
+            model = model, 
+            criterion = criterion, 
+            dataloader = train_dataloader, 
+            optimizer = optimizer, 
+            device = device
+        )
         scheduler.step()
-        print('epoch: train', epoch, 'loss_total', loss_total, 'loss_e', loss_e_total, 'loss_f', loss_f_total)
+        print('epoch: train', epoch, ', loss_total: ', loss_total)
         writer.add_scalar('loss_total', loss_total, epoch)
-        writer.add_scalar('loss_e', loss_e_total, epoch)
-        writer.add_scalar('loss_f', loss_f_total, epoch)
         writer.add_scalar('lr', optimizer.param_groups[0]['lr'], epoch)
 
         #評価
-        loss_total, loss_e_total, loss_f_total = evaluate(model = model, 
-                                                          criterion = criterion, 
-                                                          energy_weight = energy_weight, 
-                                                          force_weight = force_weight, 
-                                                          dataloader = test_dataloader, 
-                                                          device = device)
+        loss_total = evaluate(
+            model = model, 
+            criterion = criterion, 
+            dataloader = test_dataloader, 
+            device = device
+        )
 
-        print('epoch: test', epoch, 'loss_total', loss_total, 'loss_e', loss_e_total, 'loss_f', loss_f_total)
+        print('epoch: test', epoch, ', loss_total: ', loss_total,)
         writer.add_scalar('loss_total_test', loss_total, epoch)
-        writer.add_scalar('loss_e_test', loss_e_total, epoch)
-        writer.add_scalar('loss_f_test', loss_f_total, epoch)
 
     writer.close()
 
@@ -187,28 +160,15 @@ def main():
     torch.save(model, save_path_full)
 
     #プロット 
-    results_energy=[]
     results_forces=[]
-    ref_energy=[]
     ref_forces=[]
     for batch in test_dataloader:
         batch = batch.to(device)
-        energies,forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
-        results_energy.extend(energies.detach().to('cpu').numpy().flatten())
+        forces = model(batch.x, batch.edge_index, batch.edge_weight, batch.batch)
         results_forces.extend(forces.detach().to('cpu').numpy().flatten())
-        ref_energy.extend(batch.y.detach().to('cpu').numpy().flatten())
         ref_forces.extend(batch.forces.detach().to('cpu').numpy().flatten())
 
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(5,5))
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.scatter(ref_energy,results_energy)
-    plt.xlabel('reference energy')
-    plt.ylabel('predicted energy')
-    plt.title('SchNetModel energy')
-    plt.savefig(f'energy_{output_name}_torch_full_stepLR.png')
-    plt.close()
-
     plt.figure(figsize=(5,5))
     plt.gca().set_aspect('equal', adjustable='box')
     plt.scatter(ref_forces,results_forces)
