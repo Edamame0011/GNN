@@ -382,9 +382,9 @@ namespace FlashSchNet::kernels {
         const torch::Tensor& edge_weight, 
         const torch::Tensor& edge_src, 
         const torch::Tensor& dst_ptr, 
-        int num_nodes, 
         float cutoff
     ) {
+        int num_nodes = x.size(0);
         int feat_dim = x.size(1);
 
         auto output = torch::zeros({num_nodes, feat_dim}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
@@ -414,9 +414,9 @@ namespace FlashSchNet::kernels {
         const torch::Tensor& edge_weight, 
         const torch::Tensor& edge_src, 
         const torch::Tensor& edge_dst, 
-        int num_nodes, 
         float cutoff
     ) {
+        int num_nodes = grad_output.size(0);
         int feat_dim = grad_output.size(1);
         int num_edges = edge_src.size(0);
         auto grad_x = torch::zeros({num_nodes, feat_dim}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
@@ -479,9 +479,9 @@ namespace FlashSchNet::kernels {
         const torch::Tensor& edge_weight, 
         const torch::Tensor& edge_src, 
         const torch::Tensor& dst_ptr, 
-        int num_nodes, 
         float cutoff
     ) {
+        int num_nodes = x.size(0);
         int feat_dim = x.size(1);
 
         auto grad_edge_weight = torch::empty_like(edge_weight);
