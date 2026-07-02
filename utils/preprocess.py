@@ -69,6 +69,11 @@ def main():
         help = ".xyzファイルのパス"
     )
     parser.add_argument(
+        "-o", '--output', type = str, 
+        default = "data/data.pt", 
+        help = "カットオフ半径"
+    )
+    parser.add_argument(
         '--cutoff', type = float, 
         default = 5.0, 
         help = "カットオフ半径"
@@ -76,6 +81,7 @@ def main():
     args = parser.parse_args()
 
     path = args.input
+    output = args.output
     cutoff = args.cutoff
 
     atoms = iread(path, format = 'extxyz')
@@ -86,7 +92,7 @@ def main():
 
     data_list = ConvertAtomListToDataList(atoms_list, cutoff)
 
-    save(data_list, 'data/data.pt')
+    save(data_list, output)
 
 if __name__ == '__main__':
     main()
